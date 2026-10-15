@@ -1,0 +1,5 @@
+[tools]
+java = "temurin-21.0.12+8.0.LTS"
+
+[env]
+ANDROID_HOME = "{{env.HOME}}/Android/Sdk"

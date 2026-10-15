@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="paper">#FFFDFBF7</color>
+    <color name="chrome">#FFF1EEE8</color>
+    <color name="sidebar">#FFE9E5DD</color>
+    <color name="ink">#FF1F1F1F</color>
+    <color name="accent">#FF2F6FD6</color>
+    <color name="muted">#FF6B6B6B</color>
+    <color name="card">#FFFFFFFF</color>
+    <color name="card_stroke">#1F000000</color>
+    <color name="divider">#26000000</color>
+    <color name="press">#1A000000</color>
+    <color name="selected">#332F6FD6</color>
+    <color name="toolbar">#F7FFFFFF</color>
+    <color name="popup">#FFFFFFFF</color>
+</resources>

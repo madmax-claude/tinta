@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Trazo de tinta en curva sobre el lienzo de 108 dp del ícono adaptativo. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M34,66 C40,46 50,42 54,52 C58,62 66,62 74,42"
+        android:strokeWidth="6"
+        android:strokeColor="#FF2F6FD6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#FF1F1F1F"
+        android:pathData="M34,74 L74,74 L74,77 L34,77 Z" />
+</vector>

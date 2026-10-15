@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/chrome"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:id="@+id/topbar"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="6dp">
+
+        <ImageButton
+            android:id="@+id/back"
+            style="@style/ToolButton"
+            android:contentDescription="@string/back"
+            android:src="@drawable/ic_back" />
+
+        <com.octavio.tinta.ui.TabStrip
+            android:id="@+id/tabs"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp" />
+
+        <ImageButton
+            android:id="@+id/search"
+            style="@style/ToolButton"
+            android:contentDescription="@string/search"
+            android:src="@drawable/ic_search" />
+
+        <ImageButton
+            android:id="@+id/sheet"
+            style="@style/ToolButton"
+            android:contentDescription="@string/sheet"
+            android:src="@drawable/ic_grid" />
+
+        <ImageButton
+            android:id="@+id/beside"
+            style="@style/ToolButton"
+            android:contentDescription="@string/open_beside"
+            android:src="@drawable/ic_split" />
+
+        <ImageButton
+            android:id="@+id/dark"
+            style="@style/ToolButton"
+            android:contentDescription="@string/dark_mode"
+            android:src="@drawable/ic_dark" />
+
+        <ImageButton
+            android:id="@+id/fit"
+            style="@style/ToolButton"
+            android:contentDescription="@string/fit"
+            android:src="@drawable/ic_fit" />
+
+        <ImageButton
+            android:id="@+id/fullscreen"
+            style="@style/ToolButton"
+            android:contentDescription="@string/fullscreen"
+            android:src="@drawable/ic_fullscreen" />
+
+        <ImageButton
+            android:id="@+id/export"
+            style="@style/ToolButton"
+            android:contentDescription="@string/export_pdf"
+            android:src="@drawable/ic_share" />
+    </LinearLayout>
+
+    <View
+        android:id="@+id/topbar_divider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <FrameLayout
+        android:id="@+id/canvas_box"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipChildren="true">
+
+        <com.octavio.tinta.canvas.NoteCanvasView
+            android:id="@+id/canvas"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <ProgressBar
+            android:id="@+id/loading"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+    </FrameLayout>
+</LinearLayout>
