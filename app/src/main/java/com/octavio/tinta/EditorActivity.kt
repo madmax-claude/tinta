@@ -4,6 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -11,6 +14,8 @@ import android.graphics.BitmapFactory
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -23,6 +28,7 @@ import android.widget.PopupMenu
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -58,6 +64,7 @@ import com.octavio.tinta.storage.Imports
 import com.octavio.tinta.storage.NoteStore
 import com.octavio.tinta.storage.Stickers
 import com.octavio.tinta.ui.AudioPlayerBar
+import com.octavio.tinta.ui.CaptureBar
 import com.octavio.tinta.ui.CropDialog
 import com.octavio.tinta.ui.FloatingToolbar
 import com.octavio.tinta.ui.PageStrip
@@ -94,7 +101,8 @@ class EditorActivity :
     TabStrip.Callbacks,
     PageStrip.Callbacks,
     ZoomBar.Callbacks,
-    SearchPanel.Callbacks {
+    SearchPanel.Callbacks,
+    CaptureBar.Callbacks {
 
     private lateinit var store: NoteStore
     private lateinit var prefs: Prefs
@@ -111,6 +119,11 @@ class EditorActivity :
     private lateinit var pageStrip: PageStrip
     private lateinit var zoomBar: ZoomBar
     private lateinit var searchPanel: SearchPanel
+    private lateinit var captureBar: CaptureBar
+
+    /** Lo marcado con la herramienta de captura (rectángulo del mundo), o null. */
+    private var captureArea: RectF? = null
+    private val captureScreen = RectF()
 
     /** Los renglones leídos de la nota abierta, y para qué versión de la nota (su `modified`). */
     private var searchLines: List<HandText.Line>? = null
@@ -197,7 +210,7 @@ class EditorActivity :
         findViewById<View>(R.id.export).setOnClickListener { exportPdf() }
         findViewById<View>(R.id.fullscreen).setOnClickListener { setFullscreen(true) }
         listOf(R.id.search, R.id.sheet, R.id.beside, R.id.dark, R.id.fit, R.id.fullscreen, R.id.export).forEach {
-            findViewById<View>(it).apply { tooltipText = contentDescription }
+            findViewById<View>(it).apply { tip(contentDescription) }
         }
 
         setupOverlays()
@@ -336,6 +349,7 @@ class EditorActivity :
     private fun leaveCurrent() {
         val n = note ?: return
         if (canvas.zoomOn) setZoom(false)
+        canvas.clearCapture()
         closeSearch()
         searchLines = null
         if (recorder.recording) recorder.stop()
@@ -505,7 +519,7 @@ class EditorActivity :
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) return
         // Con dos notas en paralelo, lo que se cambió en la otra (modo, lápices) vale acá también.
-        if (prefs.dark != isDark) {
+        if (prefs.dark != isDark || prefs.helpMessages != helpShown) {
             handler.removeCallbacks(autosave)
             canvas.finishPending()
             save(withThumbnail = false)
@@ -556,6 +570,7 @@ class EditorActivity :
             else -> null
         }
         selectionBar.showFor(if (shown && !canvas.busy) selectionRect else null, canvas.selectionHasInk, editAs)
+        if (captureArea != null && canvas.captureOnScreen(captureScreen)) captureBar.showFor(captureScreen)
     }
 
     /** Clic del botón lateral: vuelve a la herramienta de antes (y otro clic, a esta). */
@@ -573,7 +588,7 @@ class EditorActivity :
     private fun swapTool() {
         val p = previousTool
         if (p == null) {
-            toast(getString(R.string.no_previous_tool))
+            hint(getString(R.string.no_previous_tool))
             return
         }
         mode = p.mode
@@ -799,7 +814,12 @@ class EditorActivity :
         toolbar.callbacks = this
         toolbar.vertical = prefs.toolbarVertical
         box.addView(toolbar, wrap())
-        box.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> toolbar.placeAt(prefs.toolbarX, prefs.toolbarY) }
+        // Sólo si cambió el tamaño (pantalla dividida, girar): el listener también salta con cada
+        // cambio de adentro (el reloj, cada segundo), y si no la barra volvía a donde estaba
+        // mientras se la arrastraba.
+        box.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+            if (r - l != or - ol || b - t != ob - ot) toolbar.placeAt(prefs.toolbarX, prefs.toolbarY)
+        }
         selectionBar = SelectionBar(this)
         selectionBar.callbacks = this
         box.addView(selectionBar, wrap())
@@ -823,6 +843,9 @@ class EditorActivity :
         zoomBar = ZoomBar(this)
         zoomBar.callbacks = this
         box.addView(zoomBar, wrap())
+        captureBar = CaptureBar(this)
+        captureBar.callbacks = this
+        box.addView(captureBar, wrap())
         searchPanel = SearchPanel(this)
         searchPanel.callbacks = this
         box.addView(searchPanel, FrameLayout.LayoutParams(dp(SearchPanel.WIDTH_DP).toInt(), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
@@ -845,14 +868,16 @@ class EditorActivity :
             toast(getString(R.string.timer_done))
         }
         box.addView(timer, wrap())
-        box.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> timer.placeAt(prefs.timerX, prefs.timerY) }
+        box.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+            if (r - l != or - ol || b - t != ob - ot) timer.placeAt(prefs.timerX, prefs.timerY)
+        }
         exitFullscreen = ImageButton(this).apply {
             setImageResource(R.drawable.ic_fullscreen_exit)
             background = getDrawable(R.drawable.bg_toolbar)
             elevation = dp(4f)
             alpha = 0.75f
             contentDescription = getString(R.string.exit_fullscreen)
-            tooltipText = contentDescription
+            tip(contentDescription)
             setOnClickListener { setFullscreen(false) }
             visibility = View.GONE
         }
@@ -861,7 +886,7 @@ class EditorActivity :
         })
         pens = prefs.pens
         selected = prefs.selectedPen.coerceIn(0, pens.lastIndex)
-        mode = prefs.mode.takeIf { it != Mode.LASER } ?: Mode.PEN
+        mode = prefs.mode.takeIf { it != Mode.LASER && it != Mode.CAPTURE } ?: Mode.PEN
         canvas.eraserRadius = prefs.eraserRadius
         canvas.partialErase = prefs.eraserPartial
         canvas.lassoFilter = prefs.lassoFilter
@@ -962,7 +987,7 @@ class EditorActivity :
             onSaveColor = { c -> prefs.savedColors = (listOf(c) + prefs.savedColors).distinct().take(MAX_SAVED_COLORS) },
             onForgetColor = { c ->
                 prefs.savedColors = prefs.savedColors - c
-                toast("Color quitado de la paleta")
+                hint("Color quitado de la paleta")
             },
             canDelete = pens.size > 1,
             holdForShapes = canvas.holdForShapes,
@@ -1017,6 +1042,134 @@ class EditorActivity :
         }
         mode = Mode.LASSO
         applyTool()
+    }
+
+    // --- Captura ---
+
+    override fun onCaptureClick(button: View) {
+        if (mode == Mode.CAPTURE) {
+            // Segundo toque: capturar todo lo que se ve, sin marcar.
+            PopupMenu(this, button).apply {
+                menu.add(getString(R.string.capture_visible)).setOnMenuItemClickListener {
+                    canvas.captureVisible()
+                    true
+                }
+                show()
+            }
+            return
+        }
+        mode = Mode.CAPTURE
+        applyTool()
+        if (!prefs.captureHintShown) {
+            prefs.captureHintShown = true
+            hint(getString(R.string.capture_hint), long = true)
+        }
+    }
+
+    override fun onCaptureArea(world: RectF) {
+        captureArea = RectF(world)
+        if (canvas.captureOnScreen(captureScreen)) captureBar.showFor(captureScreen)
+    }
+
+    override fun onCaptureCleared() {
+        captureArea = null
+        captureBar.showFor(null)
+    }
+
+    override fun onCaptureClose() = canvas.clearCapture()
+
+    override fun onCaptureCopy() = withCapture { bytes, area ->
+        // Para pegarla en una nota: como una imagen del mismo tamaño que lo capturado.
+        val file = NoteStore.keep(File(filesDir, "portapapeles").apply { mkdirs() }, bytes)
+        Clipboard.clip = Clipboard.Clip(
+            emptyList(), listOf(NoteImage(area.left, area.top, area.width(), area.height(), 0f, file)), emptyList(), emptyList(), RectF(area),
+        )
+        // Y para pegarla en otra app.
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", exportFile(bytes))
+        runOnUiThread {
+            getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newUri(contentResolver, getString(R.string.capture), uri))
+            hint(getString(R.string.capture_copied), long = true)
+            canvas.clearCapture()
+        }
+    }
+
+    override fun onCaptureSave() = withCapture { bytes, _ ->
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, captureName() + ".png")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Tinta")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: error("no se pudo crear la imagen")
+        try {
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("no se pudo escribir la imagen")
+        } catch (e: Exception) {
+            contentResolver.delete(uri, null, null)
+            throw e
+        }
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        contentResolver.update(uri, values, null, null)
+        runOnUiThread {
+            hint(getString(R.string.capture_saved))
+            canvas.clearCapture()
+        }
+    }
+
+    override fun onCaptureShare() = withCapture { bytes, _ ->
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", exportFile(bytes))
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("image/png")
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runOnUiThread {
+            launching { startActivity(Intent.createChooser(send, getString(R.string.capture))) }
+            canvas.clearCapture()
+        }
+    }
+
+    /**
+     * Arma la imagen de lo capturado (en otro hilo, con una copia de la nota) y se la pasa a
+     * `action`, que también corre en ese hilo. Se dibuja la nota misma, no la pantalla: sale
+     * nítida, en colores claros y sin los botones encima.
+     */
+    private fun withCapture(action: (ByteArray, RectF) -> Unit) {
+        val n = note ?: return
+        val area = captureArea?.let(::RectF) ?: return
+        canvas.finishPending()
+        val strokes = n.strokes.toList()
+        val images = n.images.toList()
+        val texts = n.texts.toList()
+        val widgets = n.widgets.toList()
+        val background = n.background
+        val pages = n.pages
+        val pageCount = canvas.pageCount
+        // Al menos 3 px por dp, o lo de la pantalla si está más cerca, sin pasar de 4096 px de
+        // lado ni de 12 Mpx.
+        val wanted = maxOf(CAPTURE_PX_PER_DP, canvas.camera.scale)
+        val scale = min(wanted, min(CAPTURE_MAX_SIDE / maxOf(area.width(), area.height()), kotlin.math.sqrt(CAPTURE_MAX_PIXELS / (area.width() * area.height()))))
+        hint(getString(R.string.capture_working))
+        Thread({
+            val result = runCatching {
+                val bitmap = Render.area(strokes, images, texts, widgets, background, pages, pageCount, area, scale)
+                val out = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                bitmap.recycle()
+                action(out.toByteArray(), area)
+            }
+            result.onFailure { e -> runOnUiThread { toast("No se pudo hacer la captura: ${e.message}", long = true) } }
+        }, "tinta-captura").start()
+    }
+
+    /** La captura como archivo para compartir o copiar a otra app (uno nuevo cada vez). */
+    private fun exportFile(bytes: ByteArray): File {
+        val dir = File(cacheDir, "exports").apply { mkdirs() }
+        return File(dir, captureName() + ".png").apply { writeBytes(bytes) }
+    }
+
+    private fun captureName(): String {
+        val time = SimpleDateFormat("yyyy-MM-dd HH.mm.ss", Locale.US).format(Date())
+        return Render.fileName("${note?.title ?: "Tinta"} $time")
     }
 
     override fun onUndo() {
@@ -1126,7 +1279,7 @@ class EditorActivity :
     /** Agregar, insertar o borrar hojas. En una nota infinita, primero hay que elegir un tamaño. */
     private fun pagesMenu(anchor: View) {
         if (!canvas.pages.paged) {
-            toast(getString(R.string.pages_need_size), long = true)
+            hint(getString(R.string.pages_need_size), long = true)
             pickSheet(findViewById(R.id.sheet))
             return
         }
@@ -1185,7 +1338,7 @@ class EditorActivity :
     private fun addVideo(uri: Uri) {
         val n = note ?: return
         val dir = store.mediaDir(n.id)
-        toast("Agregando el video…")
+        hint("Agregando el video…")
         Thread({
             val result = runCatching { Imports.video(contentResolver, uri, dir) }
             runOnUiThread {
@@ -1241,14 +1394,14 @@ class EditorActivity :
     // --- Lo elegido con el lazo ---
 
     override fun onCopySelection() {
-        if (canvas.copySelection()) toast(getString(R.string.copied))
+        if (canvas.copySelection()) hint(getString(R.string.copied))
     }
 
     /** Copiar y borrar en un paso (el borrado se puede deshacer). */
     override fun onCutSelection() {
         if (!canvas.copySelection()) return
         canvas.deleteSelection()
-        toast(getString(R.string.cut_done))
+        hint(getString(R.string.cut_done))
     }
 
     override fun onDuplicateSelection() = canvas.duplicateSelection()
@@ -1278,7 +1431,7 @@ class EditorActivity :
         val clip = canvas.selectionClip() ?: return
         Thread({
             val ok = runCatching { Stickers(this).save(clip) }.isSuccess
-            runOnUiThread { toast(if (ok) getString(R.string.sticker_saved) else "No se pudo guardar el sticker") }
+            runOnUiThread { if (ok) hint(getString(R.string.sticker_saved)) else toast("No se pudo guardar el sticker") }
         }, "tinta-sticker").start()
     }
 
@@ -1463,7 +1616,7 @@ class EditorActivity :
         val images = n.images.toList()
         val texts = n.texts.toList()
         val widgets = n.widgets.toList()
-        toast("Generando PDF…")
+        hint("Generando PDF…")
         store.io.execute {
             val result = runCatching { Render.pdf(this, title, strokes, images, texts, widgets, background, pages) }
             runOnUiThread {
@@ -1476,6 +1629,10 @@ class EditorActivity :
     companion object {
         const val EXTRA_ID = "id"
         const val EXTRA_SLOT = "slot"
+
+        private const val CAPTURE_PX_PER_DP = 3f
+        private const val CAPTURE_MAX_SIDE = 4096f
+        private const val CAPTURE_MAX_PIXELS = 12_000_000f
 
         /** Al abrir desde la búsqueda de la lista: lo buscado, para mostrarlo en la nota. */
         const val EXTRA_SEARCH = "buscar"

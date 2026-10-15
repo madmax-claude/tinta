@@ -24,6 +24,7 @@ import com.octavio.tinta.DotView
 import com.octavio.tinta.R
 import com.octavio.tinta.canvas.Paper
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
 import com.octavio.tinta.model.LassoFilter
@@ -82,7 +83,7 @@ object Popups {
                     background = c.getDrawable(R.drawable.bg_tool)
                     scaleType = ImageView.ScaleType.CENTER
                     contentDescription = "Quitar este lápiz"
-                    tooltipText = contentDescription
+                    tip(contentDescription)
                     setOnClickListener {
                         popup.dismiss()
                         onDelete()
@@ -201,7 +202,7 @@ object Popups {
                     val p = c.dp(8f).toInt()
                     setPadding(p, p, p, p)
                     contentDescription = "Guardar este color en la paleta"
-                    tooltipText = contentDescription
+                    tip(contentDescription)
                     setOnClickListener {
                         onSaveColor(pen.color)
                         refresh()

@@ -10,6 +10,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 
 /** Acciones sobre lo elegido con el lazo; flota arriba (o abajo) de lo elegido. */
 @SuppressLint("ViewConstructor")
@@ -62,7 +63,7 @@ class SelectionBar(context: Context) : LinearLayout(context) {
         setPadding(p, p, p, p)
         scaleType = ImageView.ScaleType.FIT_CENTER
         contentDescription = description
-        tooltipText = description
+        tip(description)
         setOnClickListener(onClick)
     }.also { addView(it, LayoutParams(context.dp(42f).toInt(), context.dp(42f).toInt())) }
 
@@ -81,7 +82,7 @@ class SelectionBar(context: Context) : LinearLayout(context) {
         editAs?.let {
             edit.setImageResource(it.icon)
             edit.contentDescription = it.label
-            edit.tooltipText = it.label
+            edit.tip(it.label)
         }
         visibility = VISIBLE
         val parent = parent as? ViewGroup ?: return

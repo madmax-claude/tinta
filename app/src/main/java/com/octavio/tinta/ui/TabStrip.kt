@@ -12,6 +12,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 
 /**
  * Las notas abiertas en esta mitad de la pantalla, como pestañas: tocar una la muestra, tocar la
@@ -83,7 +84,7 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
             setImageResource(R.drawable.ic_add)
             background = context.getDrawable(R.drawable.bg_tool)
             contentDescription = "Abrir otra nota en una pestaña"
-            tooltipText = contentDescription
+            tip(contentDescription)
             setOnClickListener { callbacks?.onAddTab(it) }
         }, LinearLayout.LayoutParams(context.dp(40f).toInt(), context.dp(40f).toInt()))
         activeView?.let { v -> post { smoothScrollTo((v.left - context.dp(40f).toInt()).coerceAtLeast(0), 0) } }

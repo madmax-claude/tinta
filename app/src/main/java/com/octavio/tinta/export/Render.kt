@@ -208,6 +208,28 @@ object Render {
         canvas.restoreToCount(save)
     }
 
+    /** El rectángulo `r` del mundo como imagen (con el papel), a `scale` px por dp: las capturas. */
+    fun area(
+        strokes: List<InkStroke>,
+        images: List<NoteImage>,
+        texts: List<NoteText>,
+        widgets: List<Widget>,
+        background: Background,
+        pages: PageLayout,
+        pageCount: Int,
+        r: RectF,
+        scale: Float,
+    ): Bitmap {
+        val width = ceil(r.width() * scale).toInt().coerceAtLeast(1)
+        val height = ceil(r.height() * scale).toInt().coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        draw(
+            Canvas(bitmap), strokes, images, texts, widgets, 2048, background, pages, pageCount, scale,
+            -r.left * scale, -r.top * scale, width.toFloat(), height.toFloat(), Paper(),
+        )
+        return bitmap
+    }
+
     /** La hoja `k` entera, de `width` px de ancho, para la tira de miniaturas. */
     fun page(
         strokes: List<InkStroke>,

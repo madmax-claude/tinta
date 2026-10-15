@@ -89,7 +89,7 @@ import kotlin.math.min
 class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: AttributeSet? = null) :
     FrameLayout(context, attrs) {
 
-    enum class Mode { PEN, ERASER, LASSO, LASER }
+    enum class Mode { PEN, ERASER, LASSO, LASER, CAPTURE }
 
     interface Listener {
         fun onStrokesAdded(strokes: List<InkStroke>)
@@ -125,6 +125,12 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
          * pantalla del lienzo y (wx, wy) en el mundo, para ofrecer pegar ahí.
          */
         fun onLassoLongPress(sx: Float, sy: Float, wx: Float, wy: Float) = Unit
+
+        /** Se eligió con la herramienta de captura el rectángulo `world` (del mundo). */
+        fun onCaptureArea(world: RectF) = Unit
+
+        /** Empezó otra captura o se borró la elegida: sacar sus opciones. */
+        fun onCaptureCleared() = Unit
     }
 
     val camera = Camera(resources.displayMetrics.density)
@@ -195,6 +201,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (field == value) return
             if (field == Mode.LASSO) clearSelection()
             if (field == Mode.LASER) laser.clear()
+            if (field == Mode.CAPTURE) clearCapture()
             field = value
             hover.let { setCursor(if (it != null && wantsEraserNow()) PointF(it.x, it.y) else null) }
         }
@@ -600,7 +607,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (gesturePointer != NONE || zoomDragPointer != NONE) return
         // La lupa: en el panel sólo escribe (o borra) el lápiz; un dedo sobre el recuadro lo mueve.
         if (zoomOn && zoomPanel.contains(e.getX(i), e.getY(i))) {
-            if (!byPen || penPointer != NONE || mode == Mode.LASSO || mode == Mode.LASER) return
+            if (!byPen || penPointer != NONE || mode == Mode.LASSO || mode == Mode.LASER || mode == Mode.CAPTURE) return
             penInPanel = true
             usePanelInput()
         } else if (penPointer == NONE) {
@@ -637,7 +644,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                     tapY = e.getY(i)
                     tapAt = e.eventTime
                     // Con el lazo, mantener el dedo quieto ofrece pegar.
-                    if (mode == Mode.LASSO) postDelayed(fingerHold, LONG_PRESS_MS)
+                    if (mode == Mode.LASSO || mode == Mode.CAPTURE) postDelayed(fingerHold, LONG_PRESS_MS)
                 } else {
                     tapPointer = NONE
                 }
@@ -658,6 +665,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         if (mode == Mode.LASSO) {
             startLasso(e.getX(i), e.getY(i))
+            return
+        }
+        if (mode == Mode.CAPTURE) {
+            startCapture(e.getX(i), e.getY(i))
             return
         }
         if (mode == Mode.LASER) {
@@ -732,6 +743,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             dry.invalidate()
             return
         }
+        if (capturing) {
+            moveCapture(e.getX(i), e.getY(i))
+            return
+        }
         if (mode == Mode.LASER) {
             for (h in 0 until e.historySize) laserPoint(e.getHistoricalX(i, h), e.getHistoricalY(i, h), e.getHistoricalEventTime(h))
             laserPoint(e.getX(i), e.getY(i), e.eventTime)
@@ -779,6 +794,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         lastPenSeen = e.eventTime
         removeCallbacks(hold)
         removeCallbacks(lassoHold)
+        removeCallbacks(captureHold)
         val canceled = e.flags and MotionEvent.FLAG_CANCELED != 0
         laser.lastOrNull()?.let { if (it.upAt == Long.MAX_VALUE) it.upAt = e.eventTime }
         // Un toque del lápiz sobre un audio o un video lo reproduce en vez de dejar un punto.
@@ -819,6 +835,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             dry.invalidate()
         }
         if (erasing) endErase()
+        if (capturing) endCapture(canceled)
         penPointer = NONE
         penStroke = null
         scheduleMerge()
@@ -834,6 +851,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         useMainInput()
         removeCallbacks(hold)
         removeCallbacks(lassoHold)
+        removeCallbacks(captureHold)
         removeCallbacks(fingerHold)
         tapPointer = NONE
         penStroke?.let {
@@ -845,6 +863,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         shape = null
         shapePreview = null
         lassoPath = null
+        if (capturing) clearCapture()
         if (gesturePointer != NONE) endGesture()
         if (erasing) endErase()
         penPointer = NONE
@@ -901,7 +920,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         dry.invalidate()
         listener?.onViewportChanged()
-        if (selection != null) listener?.onSelectionChanged()
+        // Las barras de lo elegido y de la captura siguen al recuadro.
+        if (selection != null || captureRect != null) listener?.onSelectionChanged()
     }
 
     // --- Lápiz quieto: borrar o figura ---
@@ -1451,7 +1471,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     /** Lo mismo con un dedo. */
     private val fingerHold = Runnable {
-        if (tapPointer == NONE || mode != Mode.LASSO || fingers.size != 1) return@Runnable
+        if (tapPointer == NONE || (mode != Mode.LASSO && mode != Mode.CAPTURE) || fingers.size != 1) return@Runnable
         tapPointer = NONE
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         listener?.onLassoLongPress(tapX, tapY, camera.toWorldX(tapX), camera.toWorldY(tapY))
@@ -1863,6 +1883,87 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         dry.invalidate()
         listener?.onViewportChanged()
         listener?.onSelectionChanged()
+    }
+
+    // --- Captura ---
+
+    /** El rectángulo de la captura (del mundo): mientras se arrastra y mientras se eligen las opciones. */
+    private var captureRect: RectF? = null
+    private var capturing = false
+    private var captureFromX = 0f
+    private var captureFromY = 0f
+
+    val hasCapture get() = captureRect != null && !capturing
+
+    private var captureStartX = 0f
+    private var captureStartY = 0f
+
+    private fun startCapture(sx: Float, sy: Float) {
+        captureFromX = camera.toWorldX(sx)
+        captureFromY = camera.toWorldY(sy)
+        captureStartX = sx
+        captureStartY = sy
+        captureRect = RectF(captureFromX, captureFromY, captureFromX, captureFromY)
+        capturing = true
+        listener?.onCaptureCleared()
+        removeCallbacks(captureHold)
+        postDelayed(captureHold, LONG_PRESS_MS)
+        dry.invalidate()
+    }
+
+    /** El lápiz quieto con la captura, como con el lazo: no es un recuadro, es para pegar. */
+    private val captureHold = Runnable {
+        if (!capturing) return@Runnable
+        capturing = false
+        captureRect = null
+        dry.invalidate()
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        listener?.onLassoLongPress(captureStartX, captureStartY, camera.toWorldX(captureStartX), camera.toWorldY(captureStartY))
+    }
+
+    private fun moveCapture(sx: Float, sy: Float) {
+        if (hypot(sx - captureStartX, sy - captureStartY) >= TAP_SLOP * density) removeCallbacks(captureHold)
+        val x = camera.toWorldX(sx)
+        val y = camera.toWorldY(sy)
+        captureRect?.set(min(captureFromX, x), min(captureFromY, y), max(captureFromX, x), max(captureFromY, y))
+        dry.invalidate()
+    }
+
+    private fun endCapture(canceled: Boolean) {
+        capturing = false
+        val r = captureRect ?: return
+        val min = CAPTURE_MIN_DP * density
+        // Un toque o un rectángulo muy finito no es una captura.
+        if (canceled || r.width() * camera.scale < min || r.height() * camera.scale < min) {
+            clearCapture()
+            return
+        }
+        dry.invalidate()
+        listener?.onCaptureArea(RectF(r))
+    }
+
+    fun clearCapture() {
+        if (captureRect == null && !capturing) return
+        captureRect = null
+        capturing = false
+        dry.invalidate()
+        listener?.onCaptureCleared()
+    }
+
+    /** Elige como captura todo lo que se ve. */
+    fun captureVisible() {
+        val r = visibleWorld(RectF())
+        captureRect = r
+        capturing = false
+        dry.invalidate()
+        listener?.onCaptureArea(RectF(r))
+    }
+
+    /** Dónde está la captura en la pantalla (para ubicar sus opciones); false si no hay. */
+    fun captureOnScreen(out: RectF): Boolean {
+        val r = captureRect ?: return false
+        camera.worldToScreen(Matrix()).mapRect(out, r)
+        return true
     }
 
     // --- Lo encontrado al buscar ---
@@ -2290,6 +2391,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (zoomOn) drawZoom(canvas, worldToScreen)
             drawLasso(canvas)
             drawSelection(canvas)
+            captureRect?.let { drawCapture(canvas, it, worldToScreen) }
             if (drawLaser(canvas)) pending = true
             cursor?.let {
                 cursorPaint.color = if (dark) 0x99E0E0E0.toInt() else 0x99404040.toInt()
@@ -2419,6 +2521,40 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             }
         }
 
+        private val captureShade = Paint().apply { color = 0x59000000 }
+        private val captureEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2 * density
+            color = accent
+        }
+        private val captureCorner = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 4 * density
+            strokeCap = Paint.Cap.ROUND
+            color = accent
+        }
+        private val captureScreen = RectF()
+
+        /** La captura: afuera oscurecido, el borde y las esquinas marcadas. */
+        private fun drawCapture(canvas: Canvas, world: RectF, worldToScreen: Matrix) {
+            val r = captureScreen
+            worldToScreen.mapRect(r, world)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            canvas.drawRect(0f, 0f, w, r.top, captureShade)
+            canvas.drawRect(0f, r.bottom, w, h, captureShade)
+            canvas.drawRect(0f, r.top, r.left, r.bottom, captureShade)
+            canvas.drawRect(r.right, r.top, w, r.bottom, captureShade)
+            canvas.drawRect(r, captureEdge)
+            val c = min(14 * density, min(r.width(), r.height()) / 3)
+            for ((x, dx) in listOf(r.left to c, r.right to -c)) {
+                for ((y, dy) in listOf(r.top to c, r.bottom to -c)) {
+                    canvas.drawLine(x, y, x + dx, y, captureCorner)
+                    canvas.drawLine(x, y, x, y + dy, captureCorner)
+                }
+            }
+        }
+
         private val foundFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x38FFB300 }
         private val foundCurrentFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x66FFB300 }
         private val foundEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -2543,6 +2679,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
         /** Mantener apretado con el lazo para pegar. */
         const val LONG_PRESS_MS = 500L
+
+        /** Lado mínimo (dp en pantalla) de una captura; menos es un toque. */
+        const val CAPTURE_MIN_DP = 16f
 
         /** Margen (dp) que se deja alrededor de lo encontrado al llevar la vista hasta ahí. */
         const val FOCUS_MARGIN = 48f

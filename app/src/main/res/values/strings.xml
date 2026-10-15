@@ -29,6 +29,15 @@
     <string name="open_side">Abrir al lado</string>
     <string name="open_tab">Abrir en una pestaña</string>
     <string name="search">Buscar en lo escrito</string>
+    <string name="settings">Configuración</string>
+    <string name="help_messages">Mensajes de ayuda</string>
+    <string name="help_messages_hint">Las etiquetas que aparecen al pasar el lápiz sobre un botón o al mantenerlo apretado, y los avisos que explican cómo usar algo o confirman que salió bien. Los errores se muestran siempre.</string>
+    <string name="capture">Captura de Tinta</string>
+    <string name="capture_visible">Capturar todo lo que se ve</string>
+    <string name="capture_hint">Captura: marcá con el lápiz el recuadro que querés capturar, o mantené apretado para pegar. Tocá el botón otra vez para capturar todo lo que se ve.</string>
+    <string name="capture_working">Armando la captura…</string>
+    <string name="capture_copied">Captura copiada: mantené apretado para pegarla en una nota, o pegala en otra app.</string>
+    <string name="capture_saved">Captura guardada en Imágenes › Tinta</string>
     <string name="search_notes">Buscar en las notas</string>
     <string name="no_previous_tool">El botón vuelve a la herramienta anterior: elegí otra primero</string>
     <string name="cloud_connect">Conectar Google Drive</string>

@@ -9,6 +9,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 
 /** Los botones de la lupa, arriba a la derecha del panel. */
 @SuppressLint("ViewConstructor")
@@ -46,7 +47,7 @@ class ZoomBar(context: Context) : LinearLayout(context) {
             background = context.getDrawable(R.drawable.bg_tool)
             scaleType = ImageView.ScaleType.CENTER
             contentDescription = description
-            tooltipText = description
+            tip(description)
             setOnClickListener { onClick() }
         }, LayoutParams(context.dp(44f).toInt(), context.dp(44f).toInt()))
     }

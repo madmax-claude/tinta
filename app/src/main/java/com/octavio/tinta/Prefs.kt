@@ -32,6 +32,16 @@ class Prefs(context: Context) {
             ?: if (p.getBoolean("eraser", false)) NoteCanvasView.Mode.ERASER else NoteCanvasView.Mode.PEN
         set(v) = p.edit { putInt("mode", v.ordinal) }
 
+    /** Mostrar los mensajes de ayuda ([Help]). */
+    var helpMessages: Boolean
+        get() = p.getBoolean("helpMessages", true)
+        set(v) = p.edit { putBoolean("helpMessages", v) }
+
+    /** Ya se explicó cómo se usa la captura. */
+    var captureHintShown: Boolean
+        get() = p.getBoolean("captureHint", false)
+        set(v) = p.edit { putBoolean("captureHint", v) }
+
     /** El borrador saca sólo la parte que toca. */
     var eraserPartial: Boolean
         get() = p.getBoolean("eraserPartial", false)
@@ -145,8 +155,14 @@ class Prefs(context: Context) {
  * sistema, cambiando el modo noche de la configuración (así se usan los recursos de values-night).
  */
 open class TintaActivity : ComponentActivity() {
+    /** Cómo estaban los mensajes de ayuda al armar esta pantalla (si cambian, se vuelve a armar). */
+    var helpShown = true
+        private set
+
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(newBase)
+        Help.on = Prefs(newBase).helpMessages
+        helpShown = Help.on
         val night = if (Prefs(newBase).dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
         val base = newBase.resources.configuration.uiMode
         applyOverrideConfiguration(Configuration().apply { uiMode = (base and Configuration.UI_MODE_NIGHT_MASK.inv()) or night })

@@ -11,6 +11,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 
 /**
  * Barra fija pegada a un costado de la hoja con las herramientas más elaboradas, como las paletas
@@ -67,7 +68,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
             b.background = context.getDrawable(R.drawable.bg_tool)
             b.scaleType = ImageView.ScaleType.CENTER
             b.contentDescription = description
-            b.tooltipText = description
+            b.tip(description)
             b.alpha = 0.7f
             header.addView(b, LinearLayout.LayoutParams(context.dp(30f).toInt(), context.dp(30f).toInt()))
         }
@@ -80,7 +81,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
                 val p = context.dp(4f).toInt()
                 setPadding(p, p, p, p)
                 contentDescription = t.label
-                tooltipText = t.label
+                tip(t.label)
                 addView(ImageView(context).apply { setImageResource(t.icon) }, LinearLayout.LayoutParams(context.dp(24f).toInt(), context.dp(24f).toInt()))
                 addView(TextView(context).apply {
                     text = t.label

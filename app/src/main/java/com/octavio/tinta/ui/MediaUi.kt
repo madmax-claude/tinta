@@ -23,6 +23,7 @@ import android.widget.VideoView
 import com.octavio.tinta.R
 import com.octavio.tinta.canvas.WidgetPainter
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 import java.io.File
 
 /**
@@ -75,7 +76,7 @@ class RecorderBar(context: Context) : LinearLayout(context) {
         setImageResource(icon)
         background = context.getDrawable(R.drawable.bg_tool)
         contentDescription = description
-        tooltipText = description
+        tip(description)
         setOnClickListener { onClick() }
         layoutParams = LayoutParams(context.dp(44f).toInt(), context.dp(44f).toInt()).apply { marginStart = context.dp(6f).toInt() }
     }

@@ -1,5 +1,6 @@
 package com.octavio.tinta
 
+import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
@@ -18,6 +19,7 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
+import android.widget.Switch
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -112,6 +114,7 @@ class MainActivity : TintaActivity() {
                 recreate()
             }
         }
+        findViewById<View>(R.id.settings).setOnClickListener { showSettings() }
         searchBox = findViewById(R.id.search)
         searchStatus = findViewById(R.id.search_status)
         searchBox.doAfterTextChanged {
@@ -139,7 +142,7 @@ class MainActivity : TintaActivity() {
     override fun onResume() {
         super.onResume()
         // Si se cambió el modo desde el editor, esta pantalla quedó con el anterior.
-        if (prefs.dark != isDark) {
+        if (prefs.dark != isDark || prefs.helpMessages != helpShown) {
             recreate()
             return
         }
@@ -215,7 +218,7 @@ class MainActivity : TintaActivity() {
     }
 
     private fun restoreFrom(uri: Uri) {
-        toast("Trayendo las notas de la copia…")
+        hint("Trayendo las notas de la copia…")
         Thread({
             val result = runCatching {
                 contentResolver.openInputStream(uri)?.use { cloud.restore(it, EditorActivity::isOpen) } ?: error("no se pudo leer el archivo")
@@ -239,7 +242,41 @@ class MainActivity : TintaActivity() {
     /** Con la pantalla dividida esta pantalla no se pausa: el modo cambiado en la otra mitad se ve al volver. */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && prefs.dark != isDark) recreate()
+        if (hasFocus && (prefs.dark != isDark || prefs.helpMessages != helpShown)) recreate()
+    }
+
+    // --- Configuración ---
+
+    @SuppressLint("UseSwitchCompatOrMaterialCode")
+    private fun showSettings() {
+        val pad = dp(24f).toInt()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(8f).toInt(), pad, 0)
+        }
+        box.addView(Switch(this).apply {
+            text = getString(R.string.help_messages)
+            textSize = 16f
+            setTextColor(getColor(R.color.ink))
+            isChecked = prefs.helpMessages
+            setOnCheckedChangeListener { _, on ->
+                prefs.helpMessages = on
+                Help.on = on
+            }
+        })
+        box.addView(TextView(this).apply {
+            text = getString(R.string.help_messages_hint)
+            textSize = 13f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(4f).toInt(), dp(56f).toInt(), 0)
+        })
+        // Al cerrar, si cambió, la pantalla se vuelve a armar (sin o con las etiquetas de los botones).
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings)
+            .setView(box)
+            .setPositiveButton(R.string.ok, null)
+            .setOnDismissListener { if (prefs.helpMessages != helpShown) recreate() }
+            .show()
     }
 
     override fun onDestroy() {
@@ -376,7 +413,7 @@ class MainActivity : TintaActivity() {
             background = getDrawable(R.drawable.bg_tool)
             scaleType = ImageView.ScaleType.CENTER
             contentDescription = "Opciones de la carpeta «$name»"
-            tooltipText = contentDescription
+            tip(contentDescription)
             setOnClickListener { onMenu(it) }
         }
         row.setOnLongClickListener {
@@ -513,7 +550,7 @@ class MainActivity : TintaActivity() {
     }
 
     private fun importAll(uris: List<Uri>) {
-        toast("Importando…")
+        hint("Importando…")
         val target = targetFolder()
         store.io.execute {
             val messages = uris.map { uri ->
@@ -614,7 +651,7 @@ class MainActivity : TintaActivity() {
     }
 
     private fun exportPdf(info: NoteInfo) {
-        toast("Generando PDF…")
+        hint("Generando PDF…")
         store.io.execute {
             val result = runCatching {
                 val note = store.load(info.id)

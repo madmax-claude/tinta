@@ -19,6 +19,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 
 /**
  * Buscar en lo escrito: un recuadro arriba a la derecha con lo buscado, cómo va la lectura de la
@@ -118,7 +119,7 @@ class SearchPanel(context: Context) : LinearLayout(context) {
         b.background = context.getDrawable(R.drawable.bg_tool)
         b.scaleType = ImageView.ScaleType.CENTER
         b.contentDescription = description
-        b.tooltipText = description
+        b.tip(description)
         b.setOnClickListener { onClick() }
     }
 

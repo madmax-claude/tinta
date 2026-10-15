@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -135,6 +136,7 @@ class TimerPanel(context: Context) : LinearLayout(context) {
         time.apply {
             textSize = 28f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            fontFeatureSettings = "tnum" // números del mismo ancho: el panel no cambia de tamaño cada segundo
             setTextColor(context.getColor(R.color.ink))
             gravity = Gravity.CENTER
             minWidth = context.dp(110f).toInt()
@@ -200,7 +202,7 @@ class TimerPanel(context: Context) : LinearLayout(context) {
         setImageResource(icon)
         background = context.getDrawable(R.drawable.bg_tool)
         contentDescription = description
-        tooltipText = description
+        tip(description)
         setOnClickListener { onClick() }
         layoutParams = LayoutParams(context.dp(44f).toInt(), context.dp(44f).toInt())
     }
@@ -273,6 +275,11 @@ class TimerPanel(context: Context) : LinearLayout(context) {
         post { clamp() }
     }
 
+    private fun rememberPosition(parent: ViewGroup) {
+        fx = if (abs(parent.width - width) > 0) x / (parent.width - width) else 0f
+        fy = if (abs(parent.height - height) > 0) y / (parent.height - height) else 0f
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun setupDrag(handle: View) {
         val slop = ViewConfiguration.get(context).scaledTouchSlop
@@ -298,11 +305,13 @@ class TimerPanel(context: Context) : LinearLayout(context) {
                     if (dragging) {
                         x = (startX + dx).coerceIn(0f, (parent.width - width).coerceAtLeast(0).toFloat())
                         y = (startY + dy).coerceIn(0f, (parent.height - height).coerceAtLeast(0).toFloat())
+                        // Al día mientras se arrastra: si el panel cambia de tamaño en el medio
+                        // (el número del reloj), se acomoda donde está y no donde estaba.
+                        rememberPosition(parent)
                     }
                 }
                 MotionEvent.ACTION_UP -> if (dragging) {
-                    fx = if (abs(parent.width - width) > 0) x / (parent.width - width) else 0f
-                    fy = if (abs(parent.height - height) > 0) y / (parent.height - height) else 0f
+                    rememberPosition(parent)
                     onMoved?.invoke(fx, fy)
                 }
             }

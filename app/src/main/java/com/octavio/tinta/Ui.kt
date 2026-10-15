@@ -22,6 +22,25 @@ fun Context.dp(v: Float): Float = v * resources.displayMetrics.density
 fun Context.toast(text: CharSequence, long: Boolean = false) =
     Toast.makeText(this, text, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
 
+/**
+ * Los mensajes de ayuda: las etiquetas de los botones (al pasar el lápiz por encima o al
+ * mantenerlos apretados) y los avisos que explican algo o confirman que salió bien. Se apagan en
+ * Configuración, en la pantalla principal. Los errores se muestran siempre.
+ */
+object Help {
+    @Volatile var on = true
+}
+
+/** La etiqueta de un botón, si los mensajes de ayuda están prendidos. */
+fun View.tip(text: CharSequence?) {
+    tooltipText = if (Help.on) text else null
+}
+
+/** Un aviso de ayuda o de confirmación: con la ayuda apagada no se muestra (para errores, [toast]). */
+fun Context.hint(text: CharSequence, long: Boolean = false) {
+    if (Help.on) toast(text, long)
+}
+
 /** Con edge-to-edge las barras del sistema quedan encima: se compensa con padding. */
 fun View.padForSystemBars() {
     ViewCompat.setOnApplyWindowInsetsListener(this) { v, insets ->

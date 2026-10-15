@@ -64,6 +64,12 @@
             style="@style/SidebarItem"
             android:drawableStart="@drawable/ic_dark"
             android:text="@string/dark_mode" />
+
+        <TextView
+            android:id="@+id/settings"
+            style="@style/SidebarItem"
+            android:drawableStart="@drawable/ic_settings"
+            android:text="@string/settings" />
     </LinearLayout>
 
     <View

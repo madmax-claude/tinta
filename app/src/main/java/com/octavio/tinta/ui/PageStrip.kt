@@ -17,6 +17,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 
 /**
  * Las hojas de la nota en miniatura, en una tira pegada a un costado que se puede esconder (queda
@@ -76,7 +77,7 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
             hide.background = context.getDrawable(R.drawable.bg_tool)
             hide.scaleType = ImageView.ScaleType.CENTER
             hide.contentDescription = "Esconder las miniaturas"
-            hide.tooltipText = hide.contentDescription
+            hide.tip(hide.contentDescription)
             hide.alpha = 0.7f
             hide.setOnClickListener { setCollapsed(true, notify = true) }
             addView(hide, LinearLayout.LayoutParams(context.dp(30f).toInt(), context.dp(30f).toInt()))
@@ -91,7 +92,7 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
             setImageResource(R.drawable.ic_add)
             background = context.getDrawable(R.drawable.bg_tool)
             contentDescription = "Agregar una hoja al final"
-            tooltipText = contentDescription
+            tip(contentDescription)
             setOnClickListener { callbacks?.onAddPage() }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(40f).toInt()))
         tab.setImageResource(R.drawable.ic_pages)

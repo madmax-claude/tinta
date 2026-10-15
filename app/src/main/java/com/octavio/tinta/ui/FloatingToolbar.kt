@@ -12,6 +12,7 @@ import android.widget.LinearLayout
 import com.octavio.tinta.R
 import com.octavio.tinta.canvas.NoteCanvasView
 import com.octavio.tinta.dp
+import com.octavio.tinta.tip
 import com.octavio.tinta.model.Pen
 import kotlin.math.hypot
 
@@ -34,6 +35,9 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
         fun onAddPen(button: View)
         fun onEraserClick(button: View)
         fun onLassoClick(button: View)
+
+        /** La captura de pantalla (al lado del lazo). */
+        fun onCaptureClick(button: View)
         fun onUndo()
         fun onRedo()
 
@@ -49,6 +53,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     private val add = button(R.drawable.ic_add, "Agregar lápiz")
     private val eraser = button(R.drawable.ic_eraser, "Borrador")
     private val lasso = button(R.drawable.ic_lasso, "Lazo para elegir y mover")
+    private val capture = button(R.drawable.ic_capture, "Captura: marcá con el lápiz qué capturar")
     val undo = button(R.drawable.ic_undo, context.getString(R.string.undo))
     val redo = button(R.drawable.ic_redo, context.getString(R.string.redo))
     private val dividers = listOf(View(context), View(context))
@@ -80,6 +85,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
         add.setOnClickListener { callbacks?.onAddPen(it) }
         eraser.setOnClickListener { callbacks?.onEraserClick(it) }
         lasso.setOnClickListener { callbacks?.onLassoClick(it) }
+        capture.setOnClickListener { callbacks?.onCaptureClick(it) }
         undo.setOnClickListener { callbacks?.onUndo() }
         redo.setOnClickListener { callbacks?.onRedo() }
         for (d in dividers) d.setBackgroundColor(context.getColor(R.color.divider))
@@ -90,6 +96,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
         addView(dividers[0])
         addView(eraser)
         addView(lasso)
+        addView(capture)
         addView(dividers[1])
         addView(undo)
         addView(redo)
@@ -103,7 +110,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
         setPadding(p, p, p, p)
         scaleType = ImageView.ScaleType.FIT_CENTER
         contentDescription = description
-        tooltipText = description
+        tip(description)
     }
 
     fun setPens(pens: List<Pen>, selected: Int, mode: NoteCanvasView.Mode) {
@@ -125,6 +132,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
         }
         eraser.isSelected = mode == NoteCanvasView.Mode.ERASER
         lasso.isSelected = mode == NoteCanvasView.Mode.LASSO
+        capture.isSelected = mode == NoteCanvasView.Mode.CAPTURE
         post { clampToParent() }
     }
 
@@ -145,7 +153,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     private fun applyOrientation() {
         orientation = if (vertical) VERTICAL else HORIZONTAL
         pensBox.orientation = orientation
-        for (v in listOf(grip, add, eraser, lasso, undo, redo)) v.layoutParams = itemParams()
+        for (v in listOf(grip, add, eraser, lasso, capture, undo, redo)) v.layoutParams = itemParams()
         for (b in penButtons) b.layoutParams = itemParams()
         val long = context.dp(28f).toInt()
         val thin = context.dp(1f).toInt()
@@ -214,6 +222,9 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
                     if (dragging) {
                         x = (startX + dx).coerceIn(0f, (parent.width - width).coerceAtLeast(0).toFloat())
                         y = (startY + dy).coerceIn(0f, (parent.height - height).coerceAtLeast(0).toFloat())
+                        // Al día mientras se arrastra, por si algo la vuelve a acomodar en el medio.
+                        fx = x / (parent.width - width).coerceAtLeast(1)
+                        fy = y / (parent.height - height).coerceAtLeast(1)
                     }
                 }
                 MotionEvent.ACTION_UP -> {
