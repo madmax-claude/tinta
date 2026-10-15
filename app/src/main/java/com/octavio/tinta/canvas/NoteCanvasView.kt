@@ -276,6 +276,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 }
                 addFresh(added)
                 wet.removeFinishedStrokes(strokes.keys)
+                if (penStroke == null) endWritingClip()
             }
         })
     }
@@ -458,7 +459,12 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     // --- Trazos frescos ---
 
-    private fun addFresh(added: List<InkStroke>) {
+    private fun addFresh(written: List<InkStroke>) {
+        val added = if (pages.paged) written.flatMap(::clipToPage) else written
+        if (added.isEmpty()) {
+            dry.invalidate()
+            return
+        }
         listener?.onStrokesAdded(added) // los agrega al final de la lista de la nota
         fresh.addAll(added)
         dry.freshChanged()
@@ -677,6 +683,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             return
         }
         penDownAt = e.eventTime
+        startWritingClip(inY(e.getY(i)))
         startHold(e, i)
         if (pen.straight) {
             lineStart = PointF(inX(e.getX(i)), inY(e.getY(i)))
@@ -863,6 +870,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         shape = null
         shapePreview = null
         lassoPath = null
+        endWritingClip()
         if (capturing) clearCapture()
         if (gesturePointer != NONE) endGesture()
         if (erasing) endErase()
@@ -1041,6 +1049,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         shapePreview = null
         shapePen = null
         if (s != null) addFresh(listOf(s)) else dry.invalidate()
+        if (penStroke == null) endWritingClip()
     }
 
     // --- Línea recta ---
@@ -1073,6 +1082,76 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         lineStart = null
         linePreview = null
         if (line != null) addFresh(listOf(line)) else dry.invalidate()
+        endWritingClip()
+    }
+
+    // --- Escribir sólo en la hoja ---
+
+    /**
+     * En una nota con hojas (todas menos la infinita) no se escribe afuera: el trazo queda en la
+     * hoja donde empezó (o la más cercana) y lo que sale de ella no se ve ni se guarda. Así el PDF
+     * tiene todo lo escrito.
+     */
+    private var writingClip: RectF? = null
+
+    private fun pageRect(k: Int) = RectF(pages.left, pages.pageTop(k), pages.right, pages.pageTop(k) + pages.height)
+
+    private fun pageForWriting(y: Float) = pageRect(pages.pageAt(y).coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
+
+    private fun startWritingClip(worldY: Float) {
+        if (!pages.paged) {
+            endWritingClip()
+            return
+        }
+        val r = pageForWriting(worldY)
+        writingClip = r
+        // El trazo en curso lo dibuja la capa de Ink, en la pantalla (o en el panel de la lupa).
+        wet.clipBounds = android.graphics.Rect(
+            floor(r.left * inScale + inTx).toInt(), floor(r.top * inScale + inTy).toInt(),
+            ceil(r.right * inScale + inTx).toInt(), ceil(r.bottom * inScale + inTy).toInt(),
+        )
+    }
+
+    private fun endWritingClip() {
+        writingClip = null
+        if (wet.clipBounds != null) wet.clipBounds = null
+    }
+
+    /** Lo que queda del trazo dentro de la hoja donde empezó (ver [writingClip]). */
+    private fun clipToPage(s: InkStroke): List<InkStroke> {
+        val stroke = s.stroke ?: return listOf(s)
+        val inputs = stroke.inputs
+        if (inputs.size == 0) return listOf(s)
+        val p = StrokeInput()
+        inputs.populate(0, p)
+        val page = pageForWriting(p.y)
+        // La tinta entera adentro: queda como está (casi siempre).
+        if (s.left >= page.left && s.right <= page.right && s.top >= page.top && s.bottom <= page.bottom) return listOf(s)
+        // Medio grosor adentro del borde, para que la tinta no se asome fuera de la hoja.
+        val pad = (s.size / 2).coerceAtMost(min(page.width(), page.height()) / 4)
+        val points = ArrayList<Cut.Point>(inputs.size)
+        for (k in 0 until inputs.size) {
+            inputs.populate(k, p)
+            points.add(Cut.Point(p.x, p.y, p.elapsedTimeMillis.toFloat(), p.pressure, p.tiltRadians, p.orientationRadians))
+        }
+        val parts = Cut.inside(points, page.left + pad, page.top + pad, page.right - pad, page.bottom - pad, (s.size / 2).coerceAtLeast(0.5f))
+            ?: return listOf(s)
+        return rebuild(s, stroke, parts)
+    }
+
+    /** Arma un trazo por cada parte (puntos de [Cut]) con el pincel del original. */
+    private fun rebuild(s: InkStroke, stroke: Stroke, parts: List<List<Cut.Point>>): List<InkStroke> {
+        val inputs = stroke.inputs
+        val type = inputs.getToolType()
+        val unit = if (inputs.hasStrokeUnitLength()) inputs.getStrokeUnitLengthCm() else StrokeInput.NO_STROKE_UNIT_LENGTH
+        return parts.mapNotNull { part ->
+            runCatching {
+                val batch = MutableStrokeInputBatch()
+                val t0 = part[0].t
+                for (q in part) batch.add(type, q.x, q.y, (q.t - t0).toLong().coerceAtLeast(0L), unit, q.pressure, q.tilt, q.orientation)
+                InkStroke(s.tool, Stroke(stroke.brush, batch), s.sensitivity)
+            }.getOrNull()
+        }
     }
 
     // --- Borrador ---
@@ -1150,16 +1229,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val reach = r + s.size * 0.5f
         val step = (min(r, s.size) / 2f).coerceAtLeast(0.3f)
         val parts = Cut.outside(points, ax, ay, bx, by, reach, step) ?: return null
-        val type = inputs.getToolType()
-        val unit = if (inputs.hasStrokeUnitLength()) inputs.getStrokeUnitLengthCm() else StrokeInput.NO_STROKE_UNIT_LENGTH
-        return parts.mapNotNull { part ->
-            runCatching {
-                val batch = MutableStrokeInputBatch()
-                val t0 = part[0].t
-                for (q in part) batch.add(type, q.x, q.y, (q.t - t0).toLong().coerceAtLeast(0L), unit, q.pressure, q.tilt, q.orientation)
-                InkStroke(s.tool, Stroke(stroke.brush, batch), s.sensitivity)
-            }.getOrNull()
-        }
+        return rebuild(s, stroke, parts)
     }
 
     private fun endErase() {
@@ -2382,8 +2452,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (fresh.isNotEmpty() || linePreview != null || shapePreview != null) {
                 InkDraw.use { r ->
                     for (s in fresh) r.draw(canvas, s.display(dark) ?: continue, worldToScreen)
-                    linePreview?.display(dark)?.let { r.draw(canvas, it, worldToScreen) }
-                    shapePreview?.display(dark)?.let { r.draw(canvas, it, worldToScreen) }
+                    drawPreviews(canvas, r, worldToScreen)
                 }
             }
             canvas.restoreToCount(save)
@@ -2438,8 +2507,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             canvas.concat(zoomMatrix)
             InkDraw.use { rd ->
                 for (st in fresh) if (st.intersects(zoomBox.left, zoomBox.top, zoomBox.right, zoomBox.bottom)) rd.draw(canvas, st.display(dark) ?: continue, zoomMatrix)
-                linePreview?.display(dark)?.let { rd.draw(canvas, it, zoomMatrix) }
-                shapePreview?.display(dark)?.let { rd.draw(canvas, it, zoomMatrix) }
+                drawPreviews(canvas, rd, zoomMatrix)
             }
             canvas.restoreToCount(save)
             canvas.drawRoundRect(p, r, r, zoomFrame)
@@ -2519,6 +2587,16 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 val deg = ((Math.round(l.t.degrees) % 360) + 360) % 360
                 canvas.drawText("$deg°", handle.x, handle.y - r * 1.8f, angleText)
             }
+        }
+
+        /** La línea recta y la figura en curso; en una nota con hojas, sólo lo que cae en la hoja. */
+        private fun drawPreviews(canvas: Canvas, r: androidx.ink.rendering.android.canvas.CanvasStrokeRenderer, m: Matrix) {
+            if (linePreview == null && shapePreview == null) return
+            val save = canvas.save()
+            writingClip?.let { canvas.clipRect(it) }
+            linePreview?.display(dark)?.let { r.draw(canvas, it, m) }
+            shapePreview?.display(dark)?.let { r.draw(canvas, it, m) }
+            canvas.restoreToCount(save)
         }
 
         private val captureShade = Paint().apply { color = 0x59000000 }

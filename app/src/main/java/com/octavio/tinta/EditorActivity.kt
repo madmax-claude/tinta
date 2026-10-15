@@ -934,6 +934,23 @@ class EditorActivity :
         )
     }
 
+    /** Cambiar un lápiz de lugar en la barra; el elegido sigue elegido. */
+    override fun onPenMoved(from: Int, to: Int) {
+        if (from !in pens.indices || to !in pens.indices || from == to) return
+        pens = pens.toMutableList().also { it.add(to, it.removeAt(from)) }
+        fun follow(i: Int) = when {
+            i == from -> to
+            from < to && i in from + 1..to -> i - 1
+            from > to && i in to until from -> i + 1
+            else -> i
+        }
+        selected = follow(selected)
+        currentTool = currentTool?.let { if (it.mode == Mode.PEN) it.copy(pen = follow(it.pen)) else it }
+        previousTool = previousTool?.let { if (it.mode == Mode.PEN) it.copy(pen = follow(it.pen)) else it }
+        prefs.pens = pens
+        applyTool()
+    }
+
     private fun deletePen(index: Int) {
         if (pens.size <= 1 || index !in pens.indices) return
         pens = pens.toMutableList().also { it.removeAt(index) }

@@ -47,4 +47,20 @@ class CutTest {
         h.redo()
         assertEquals(listOf("a", "b1", "b2", "c"), items)
     }
+
+    @Test
+    fun insideKeepsOnlyThePartOnThePage() {
+        // Una línea de -50 a 150 sobre una hoja de 0 a 100: queda de 0 a 100.
+        val parts = Cut.inside(line(-50f, 150f), 0f, -10f, 100f, 10f, 2f)!!
+        assertEquals(1, parts.size)
+        assertTrue(parts[0].first().x >= 0f && parts[0].first().x <= 2f)
+        assertTrue(parts[0].last().x <= 100f && parts[0].last().x >= 98f)
+    }
+
+    @Test
+    fun insideLeavesWholeStrokesAlone() {
+        assertNull(Cut.inside(line(10f, 90f), 0f, -10f, 100f, 10f, 2f))
+        // Todo afuera: no queda nada.
+        assertEquals(0, Cut.inside(line(200f, 300f), 0f, -10f, 100f, 10f, 2f)!!.size)
+    }
 }

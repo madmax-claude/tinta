@@ -36,6 +36,29 @@ object Cut {
         return parts
     }
 
+    /**
+     * Las partes que caen dentro del rectángulo (l, t, r, b), en orden: lo que queda de un trazo en
+     * una hoja si no se puede escribir fuera de ella. Null si está todo adentro (queda como estaba);
+     * vacía si está todo afuera. Las partes de un solo punto se descartan.
+     */
+    fun inside(points: List<Point>, l: Float, t: Float, r: Float, b: Float, step: Float): List<List<Point>>? {
+        if (points.isEmpty()) return null
+        fun isIn(p: Point) = p.x >= l && p.x <= r && p.y >= t && p.y <= b
+        if (points.all(::isIn)) return null
+        val parts = ArrayList<List<Point>>()
+        var run = ArrayList<Point>()
+        for (p in densify(points, step)) {
+            if (isIn(p)) {
+                run.add(p)
+            } else {
+                if (run.size >= 2) parts.add(run)
+                run = ArrayList()
+            }
+        }
+        if (run.size >= 2) parts.add(run)
+        return parts
+    }
+
     fun densify(points: List<Point>, step: Float): List<Point> {
         val out = ArrayList<Point>(points.size * 2)
         out.add(points[0])
