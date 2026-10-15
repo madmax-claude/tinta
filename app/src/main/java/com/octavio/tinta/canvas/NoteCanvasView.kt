@@ -2085,6 +2085,19 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         private var stale = true
         private var version = 0
         private val overview = Overview { post { invalidate() } }
+        private var overviewAskedAt = 0L
+
+        /**
+         * Con la vista quieta, arma de antemano la imagen de toda la nota si es grande y la que
+         * hay quedó vieja; como mucho cada [OVERVIEW_EVERY_MS], para no gastar mientras se escribe.
+         */
+        private fun prepareOverview() {
+            if (strokes.size < CROWDED || overview.isCurrent(version)) return
+            val now = android.os.SystemClock.uptimeMillis()
+            if (overview.hasImage && now - overviewAskedAt < OVERVIEW_EVERY_MS) return
+            overviewAskedAt = now
+            overview.request(strokes.toList(), version, dark)
+        }
         private val paper = Paper()
         val painter = WidgetPainter()
         val textPaint = Elements.newTextPaint()
@@ -2169,6 +2182,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         fun darkChanged() {
             zoomDirty = true
             version++
+            overview.clear()
             chunks.dark = dark
             tiles.invalidateAll()
             invalidate()
@@ -2177,6 +2191,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         fun reset() {
             chunks.clear()
             tiles.clear()
+            overview.clear()
             strokesChanged()
         }
 
@@ -2240,12 +2255,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             var save = canvas.save()
             canvas.concat(worldToScreen)
             chunks.keepAlive(canvas) // antes que las baldosas
-            // Con miles de trazos a la vista, mientras se pintan las baldosas se ve la imagen
-            // de toda la nota.
-            val crowded = chunks.count(view.left, view.top, view.right, view.bottom) > CROWDED
-            if (crowded && tiles.incomplete) {
-                overview.request(strokes.toList(), version, dark)
-                if (camera.scale <= overview.scale * MAX_UPSCALE) overview.draw(canvas)
+            // Mientras faltan baldosas (o están apareciendo) se ve debajo la imagen de toda la
+            // nota, en vez del papel vacío. Se arma sólo en notas con muchos trazos a la vista,
+            // que son las que tardan más de un cuadro; aunque esté vieja (después de escribir),
+            // sirve igual hasta que llegan las baldosas.
+            if (tiles.needsBackdrop(view)) {
+                val crowded = chunks.count(view.left, view.top, view.right, view.bottom) > CROWDED
+                if (crowded && !overview.hasImage && !overview.isCurrent(version)) overview.request(strokes.toList(), version, dark)
+                if (overview.hasImage && camera.scale <= overview.scale * MAX_UPSCALE) overview.draw(canvas)
             }
             canvas.restoreToCount(save)
 
@@ -2280,6 +2297,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             }
             // Con todo quieto y pintado, se adelanta trabajo para cuando se aleje la vista.
             if (!pending && settled && penPointer == NONE && fresh.isEmpty()) {
+                // La imagen de toda la nota (se arma en otros hilos), para que al alejar la vista
+                // haya algo debajo desde el primer cuadro.
+                prepareOverview()
                 pending = chunks.prewarm(recordScale, System.nanoTime() + PREWARM_NS)
             }
             if (pending) postInvalidateOnAnimation()
@@ -2541,10 +2561,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         const val WARM_NOW_LIMIT = 1500
 
         /** Trazos a la vista a partir de los cuales conviene la imagen de toda la nota. */
-        const val CROWDED = 6000
+        const val CROWDED = 1500
 
-        /** Cuánto se puede agrandar esa imagen antes de que se note borrosa. */
-        const val MAX_UPSCALE = 3f
+        /** Cuánto se puede agrandar esa imagen (borrosa, pero mejor que el papel vacío). */
+        const val MAX_UPSCALE = 4f
+
+        /** Cada cuánto, como mucho, se rehace esa imagen de antemano. */
+        const val OVERVIEW_EVERY_MS = 20_000L
         const val PALM_GRACE_MS = 400L
 
         /** Un clic del botón lateral dura menos que esto. */

@@ -34,6 +34,9 @@ class Overview(private val onReady: () -> Unit) {
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "tinta-vista").apply { priority = Thread.MIN_PRIORITY } }
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
 
+    /** Cambia con [clear]: lo que se estaba armando para antes ya no sirve. */
+    @Volatile private var generation = 0
+
     /** Px de la imagen por dp del mundo, o 0 si no hay imagen. */
     val scale get() = image?.scale ?: 0f
 
@@ -51,6 +54,7 @@ class Overview(private val onReady: () -> Unit) {
         }
         worker.execute {
             while (true) {
+                val gen = generation
                 val (list, v, dark) = synchronized(lock) {
                     val w = wanted
                     wanted = null
@@ -58,9 +62,19 @@ class Overview(private val onReady: () -> Unit) {
                     w
                 } ?: break
                 val built = runCatching { build(list, v, dark) }.getOrNull() ?: continue
+                if (gen != generation) continue
                 image = built
                 onReady()
             }
+        }
+    }
+
+    /** Otra nota, u otro modo (oscuro): la imagen de antes no se tiene que ver más. */
+    fun clear() {
+        synchronized(lock) {
+            generation++
+            wanted = null
+            image = null
         }
     }
 

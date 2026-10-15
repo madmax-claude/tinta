@@ -3,6 +3,7 @@ package com.octavio.tinta.canvas
 import android.graphics.Canvas
 import android.graphics.RectF
 import android.graphics.RenderNode
+import android.os.SystemClock
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.ln
@@ -18,6 +19,10 @@ import kotlin.math.roundToInt
  * otra se agrandan o achican un poco. Al cambiar de escala, las nuevas se pintan de a algunas por
  * cuadro (según cuántos trazos tienen, [Content.cost]) y mientras tanto se ven las de la escala
  * anterior estiradas.
+ *
+ * Una baldosa nueva aparece de a poco ([FADE_MS]) sobre lo que haya debajo (la escala anterior
+ * o la imagen de toda la nota), así la hoja se va enfocando en vez de llenarse de a cuadrados.
+ * Las que se repintan porque cambió algo aparecen de una.
  *
  * Una baldosa sólo se repinta cuando se vuelve a grabar, nunca sola: si cambia una tanda de
  * trazos, quien la cambió marca la zona con [invalidate].
@@ -51,6 +56,10 @@ class Tiles(private val density: Float) {
         /** Lo que cambió se tiene que ver en este cuadro: se repinta aunque no haya presupuesto. */
         var urgent = false
         var frame = 0L
+
+        /** Desde cuándo aparece (ms), -1 si empieza en el próximo cuadro, 0 si ya se ve entera. */
+        var fadeFrom = 0L
+        var alpha = 1f
 
         fun intersects(r: RectF) = !(right < r.left || left > r.right || bottom < r.top || top > r.bottom)
     }
@@ -134,15 +143,18 @@ class Tiles(private val density: Float) {
         }
     }
 
-    /** El rectángulo del mundo que cubren las baldosas a la vista (y una vuelta más) en la escala actual. */
+    /**
+     * El rectángulo del mundo que cubren las baldosas a la vista y las de alrededor (una vuelta,
+     * y [AHEAD_ROWS] filas arriba y abajo) en la escala actual.
+     */
     fun neededArea(view: RectF, out: RectF): RectF {
         val span = SIZE / levelScale(level)
         return out.apply {
             set(
                 (floor(view.left / span) - 1) * span,
-                (floor(view.top / span) - 1) * span,
+                (floor(view.top / span) - AHEAD_ROWS) * span,
                 (floor(view.right / span) + 2) * span,
-                (floor(view.bottom / span) + 2) * span,
+                (floor(view.bottom / span) + 1 + AHEAD_ROWS) * span,
             )
         }
     }
@@ -163,9 +175,12 @@ class Tiles(private val density: Float) {
         val cx = (ix0 + ix1) / 2f
         val cy = (iy0 + iy1) / 2f
 
-        // Las de la vista primero (del centro hacia afuera), después una vuelta alrededor.
+        // Las de la vista primero (del centro hacia afuera), después las de alrededor: una vuelta y
+        // más filas arriba y abajo, porque las notas se recorren sobre todo hacia abajo. Las de
+        // afuera se pintan sólo si sobra presupuesto, y se dibujan (fuera de la pantalla) para que
+        // Android no suelte su capa.
         val wanted = ArrayList<Tile>()
-        for (iy in iy0 - 1..iy1 + 1) for (ix in ix0 - 1..ix1 + 1) wanted.add(tile(level, ix, iy, span))
+        for (iy in iy0 - AHEAD_ROWS..iy1 + AHEAD_ROWS) for (ix in ix0 - 1..ix1 + 1) wanted.add(tile(level, ix, iy, span))
         wanted.sortBy {
             val inside = it.ix in ix0..ix1 && it.iy in iy0..iy1
             val d = (it.ix - cx) * (it.ix - cx) + (it.iy - cy) * (it.iy - cy)
@@ -191,12 +206,14 @@ class Tiles(private val density: Float) {
                 if (inside && !t.ready) missing = true
             }
         }
-        incomplete = missing
+        // Las que todavía están apareciendo también necesitan algo debajo.
+        val fading = wanted.any { it.fadeFrom != 0L && it.ix in ix0..ix1 && it.iy in iy0..iy1 }
+        incomplete = missing || fading
 
         // Mientras faltan baldosas se ven, debajo, las de la escala anterior.
         val prev = previous
         if (prev != NONE) {
-            if (!missing || prev == level) {
+            if (!incomplete || prev == level) {
                 if (prev != level) drop { it.level == prev }
                 previous = NONE
             } else {
@@ -207,15 +224,54 @@ class Tiles(private val density: Float) {
                 }
             }
         }
-        for (t in wanted) if (t.ready) drawTile(canvas, t, scale, tx, ty)
+        val now = SystemClock.uptimeMillis()
+        for (t in wanted) {
+            if (!t.ready) continue
+            fade(t, now)
+            drawTile(canvas, t, scale, tx, ty)
+        }
         // Las que quedaron lejos se sueltan: Android libera su capa al dejar de dibujarlas.
         drop { it.frame != frame }
-        return pending
+        return pending || fading
     }
 
-    private fun tile(level: Int, ix: Int, iy: Int, span: Float): Tile {
-        val key = (level + 64).toLong() shl 52 or ((ix + OFFSET).toLong() shl 26) or (iy + OFFSET).toLong()
-        return tiles.getOrPut(key) { Tile(level, ix, iy, span) }
+    /** Ajusta la transparencia de una baldosa que está apareciendo. */
+    private fun fade(t: Tile, now: Long) {
+        if (t.fadeFrom == 0L) {
+            setAlpha(t, 1f)
+            return
+        }
+        if (t.fadeFrom < 0) t.fadeFrom = now
+        val a = ((now - t.fadeFrom) / FADE_MS.toFloat()).coerceIn(0f, 1f)
+        if (a >= 1f) t.fadeFrom = 0L
+        // Suave al principio y al final.
+        setAlpha(t, a * a * (3 - 2 * a))
+    }
+
+    private fun setAlpha(t: Tile, a: Float) {
+        if (t.alpha == a) return
+        t.alpha = a
+        t.node.alpha = a
+    }
+
+    private fun key(level: Int, ix: Int, iy: Int) = (level + 64).toLong() shl 52 or ((ix + OFFSET).toLong() shl 26) or (iy + OFFSET).toLong()
+
+    private fun tile(level: Int, ix: Int, iy: Int, span: Float): Tile = tiles.getOrPut(key(level, ix, iy)) { Tile(level, ix, iy, span) }
+
+    /**
+     * Si en este cuadro va a faltar (o estar apareciendo) alguna baldosa de la vista, para poner
+     * algo debajo antes de dibujarlas. Llamar después de [recordScale].
+     */
+    fun needsBackdrop(view: RectF): Boolean {
+        if (level == NONE) return true
+        val span = SIZE / levelScale(level)
+        for (iy in floor(view.top / span).toInt()..floor(view.bottom / span).toInt()) {
+            for (ix in floor(view.left / span).toInt()..floor(view.right / span).toInt()) {
+                val t = tiles[key(level, ix, iy)] ?: return true
+                if (!t.ready || t.fadeFrom != 0L) return true
+            }
+        }
+        return false
     }
 
     private fun record(t: Tile, content: Content) {
@@ -223,6 +279,8 @@ class Tiles(private val density: Float) {
         val rc = t.node.beginRecording(SIZE, SIZE)
         content.record(rc, t.left, t.top, t.right, t.bottom, s)
         t.node.endRecording()
+        // Nueva: aparece de a poco. Si ya se veía (cambió algo), se cambia de una.
+        if (!t.ready) t.fadeFrom = -1L
         t.ready = true
         t.dirty = false
         t.urgent = false
@@ -267,5 +325,11 @@ class Tiles(private val density: Float) {
         private val LN2 = ln(2f)
         private const val MAX_STRETCH = 1.6f
         private const val MIN_SHRINK = 0.5f
+
+        /** Cuánto tarda en aparecer una baldosa nueva. */
+        private const val FADE_MS = 180L
+
+        /** Filas que se preparan arriba y abajo de la vista. */
+        private const val AHEAD_ROWS = 2
     }
 }
