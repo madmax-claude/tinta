@@ -1118,7 +1118,9 @@ class EditorActivity :
     override fun onDockChanged(right: Boolean, collapsed: Boolean) {
         prefs.dockRight = right
         prefs.dockCollapsed = collapsed
-        pageStrip.setSide(left = right) // la tira va del otro lado
+        // La tira va del otro lado. Al abrir, la barra se pone como quedó antes de que exista la
+        // tira (y la tira después toma el lado en updatePageStrip).
+        if (::pageStrip.isInitialized) pageStrip.setSide(left = right)
     }
 
     /** Agregar, insertar o borrar hojas. En una nota infinita, primero hay que elegir un tamaño. */
