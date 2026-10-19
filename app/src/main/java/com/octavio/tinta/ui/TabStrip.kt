@@ -39,6 +39,10 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
         addView(row)
     }
 
+    /** Color de la barra de arriba y de la pestaña elegida (Configuración); null: los de siempre. */
+    var barColor: Int? = null
+    var activeColor: Int? = null
+
     /** `tabs`: (id, título) en orden. */
     fun setTabs(tabs: List<Pair<String, String>>, active: String?) {
         row.removeAllViews()
@@ -49,12 +53,15 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
                 gravity = Gravity.CENTER_VERTICAL
                 background = context.getDrawable(R.drawable.bg_tab)
                 isSelected = id == active
+                if (id == active) activeColor?.let { backgroundTintList = android.content.res.ColorStateList.valueOf(it) }
                 val p = context.dp(10f).toInt()
                 setPadding(p, 0, context.dp(2f).toInt(), 0)
                 addView(TextView(context).apply {
                     text = title
                     textSize = if (id == active) 16f else 14f
-                    setTextColor(context.getColor(if (id == active) R.color.ink else R.color.muted))
+                    val under = if (id == active) activeColor ?: barColor else barColor
+                    val normal = context.getColor(if (id == active) R.color.ink else R.color.muted)
+                    setTextColor(if (under == null) normal else if (id == active) Chrome.ink(under, normal) else Chrome.muted(under, normal))
                     maxWidth = context.dp(if (id == active) 260f else 170f).toInt()
                     isSingleLine = true
                     ellipsize = TextUtils.TruncateAt.END
@@ -67,6 +74,7 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
                     setPadding(q, q, q, q)
                     alpha = 0.6f
                     contentDescription = "Cerrar «$title»"
+                    (if (id == active) activeColor ?: barColor else barColor)?.takeIf(Chrome::isDark)?.let { imageTintList = android.content.res.ColorStateList.valueOf(Chrome.ink(it, 0)) }
                     setOnClickListener { callbacks?.onTabClose(id) }
                 }, LinearLayout.LayoutParams(context.dp(30f).toInt(), context.dp(30f).toInt()))
                 setOnClickListener { callbacks?.onTabClick(id) }
@@ -84,6 +92,7 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
             setImageResource(R.drawable.ic_add)
             background = context.getDrawable(R.drawable.bg_tool)
             contentDescription = "Abrir otra nota en una pestaña"
+            barColor?.takeIf(Chrome::isDark)?.let { imageTintList = android.content.res.ColorStateList.valueOf(Chrome.ink(it, 0)) }
             tip(contentDescription)
             setOnClickListener { callbacks?.onAddTab(it) }
         }, LinearLayout.LayoutParams(context.dp(40f).toInt(), context.dp(40f).toInt()))

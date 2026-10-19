@@ -27,12 +27,15 @@ import androidx.core.content.IntentCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.jnotes.JnotesImporter
 import com.octavio.tinta.model.Find
 import com.octavio.tinta.model.NoteInfo
 import com.octavio.tinta.model.Note
 import com.octavio.tinta.storage.CloudBackup
+import com.octavio.tinta.ui.Chrome
+import com.octavio.tinta.ui.Popups
 import com.octavio.tinta.storage.HandText
 import com.octavio.tinta.storage.Imports
 import com.octavio.tinta.storage.Library
@@ -100,8 +103,16 @@ class MainActivity : TintaActivity() {
 
         val list = findViewById<RecyclerView>(R.id.list)
         val columns = ((resources.configuration.screenWidthDp - 240) / 260).coerceAtLeast(2)
-        list.layoutManager = GridLayoutManager(this, columns)
+        adapter.columns = columns
+        list.layoutManager = GridLayoutManager(this, columns).apply {
+            // Las carpetas van arriba, en sus filas; un hueco completa la última, así las notas
+            // empiezan en una fila nueva.
+            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(position: Int) = if (adapter.isGap(position)) adapter.gapSpan else 1
+            }
+        }
         list.adapter = adapter
+        folderTitle.movementMethod = android.text.method.LinkMovementMethod.getInstance()
 
         findViewById<View>(R.id.new_note).setOnClickListener { newNote() }
         // PDF para escribir encima; el mismo botón sigue aceptando los .Jnotes.
@@ -128,6 +139,7 @@ class MainActivity : TintaActivity() {
             getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(searchBox.windowToken, 0)
             true
         }
+        applyColors()
         cloud = CloudBackup.get(this)
         cloudRow = findViewById(R.id.cloud)
         cloudRow.setOnClickListener { cloudMenu(it) }
@@ -142,7 +154,7 @@ class MainActivity : TintaActivity() {
     override fun onResume() {
         super.onResume()
         // Si se cambió el modo desde el editor, esta pantalla quedó con el anterior.
-        if (prefs.dark != isDark || prefs.helpMessages != helpShown) {
+        if (prefs.dark != isDark || prefs.look != lookShown) {
             recreate()
             return
         }
@@ -242,7 +254,35 @@ class MainActivity : TintaActivity() {
     /** Con la pantalla dividida esta pantalla no se pausa: el modo cambiado en la otra mitad se ve al volver. */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && (prefs.dark != isDark || prefs.helpMessages != helpShown)) recreate()
+        if (hasFocus && (prefs.dark != isDark || prefs.look != lookShown)) recreate()
+    }
+
+    // --- Colores del menú principal (Configuración) ---
+
+    /** La barra de carpetas es oscura: sus renglones (que se rearman) van en claro. */
+    private var menuDark = false
+
+    private fun applyColors() {
+        prefs.menuColor?.let { c ->
+            val bar = findViewById<View>(R.id.sidebar)
+            Chrome.paint(bar, c)
+            menuDark = Chrome.isDark(c)
+        }
+        prefs.listColor?.let { c ->
+            // El fondo de atrás de todo (también detrás de las barras del sistema).
+            findViewById<View>(R.id.root).setBackgroundColor(c)
+            androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
+                isAppearanceLightStatusBars = !Chrome.isDark(c)
+                isAppearanceLightNavigationBars = !Chrome.isDark(c)
+            }
+            if (Chrome.isDark(c)) {
+                // Los textos sobre el fondo; las tarjetas y el buscador tienen su propio fondo.
+                for (id in listOf(R.id.folder_title, R.id.empty, R.id.search_status, R.id.import_jnotes, R.id.new_note)) {
+                    Chrome.lighten(findViewById(id))
+                }
+                crumbColor = Chrome.muted(c, getColor(R.color.muted))
+            }
+        }
     }
 
     // --- Configuración ---
@@ -270,12 +310,33 @@ class MainActivity : TintaActivity() {
             setTextColor(getColor(R.color.muted))
             setPadding(0, dp(4f).toInt(), dp(56f).toInt(), 0)
         })
+        // Colores de la interfaz.
+        box.addView(TextView(this).apply {
+            text = getString(R.string.colors)
+            textSize = 16f
+            setTextColor(getColor(R.color.ink))
+            setPadding(0, dp(20f).toInt(), 0, 0)
+        })
+        fun colorRow(title: String, original: Int, current: Int?, save: (Int?) -> Unit) {
+            box.addView(TextView(this).apply {
+                text = title
+                textSize = 13f
+                setTextColor(getColor(R.color.muted))
+                setPadding(0, dp(10f).toInt(), 0, dp(2f).toInt())
+            })
+            box.addView(Popups.colorChoices(this, original, com.octavio.tinta.ui.Chrome.COLORS, current, columns = 15, onPick = save))
+        }
+        colorRow(getString(R.string.color_top_bar), getColor(R.color.chrome), prefs.topBarColor) { prefs.topBarColor = it }
+        colorRow(getString(R.string.color_tools), getColor(R.color.toolbar), prefs.toolsColor) { prefs.toolsColor = it }
+        colorRow(getString(R.string.color_tab), getColor(R.color.paper), prefs.tabColor) { prefs.tabColor = it }
+        colorRow(getString(R.string.color_menu), getColor(R.color.sidebar), prefs.menuColor) { prefs.menuColor = it }
+        colorRow(getString(R.string.color_list), getColor(R.color.chrome), prefs.listColor) { prefs.listColor = it }
         // Al cerrar, si cambió, la pantalla se vuelve a armar (sin o con las etiquetas de los botones).
         AlertDialog.Builder(this)
             .setTitle(R.string.settings)
-            .setView(box)
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setPositiveButton(R.string.ok, null)
-            .setOnDismissListener { if (prefs.helpMessages != helpShown) recreate() }
+            .setOnDismissListener { if (prefs.look != lookShown) recreate() }
             .show()
     }
 
@@ -297,7 +358,8 @@ class MainActivity : TintaActivity() {
     // --- Carpetas ---
 
     private fun showFolder() {
-        val folders = store.library.folders()
+        val lib = store.library
+        val folders = lib.folders()
         if (folder != null && folder != NO_FOLDER && folders.none { it.id == folder }) folder = null
         // Sin carpetas no hay "Sin carpeta": se vuelve a todas.
         if (folder == NO_FOLDER && folders.isEmpty()) folder = null
@@ -309,36 +371,83 @@ class MainActivity : TintaActivity() {
             folder == NO_FOLDER -> notes.filter { it.folder == null }
             else -> notes.filter { it.folder == folder }
         }
+        // Las carpetas de este nivel, como en un explorador (al buscar, las que se llaman así).
+        val cards = when {
+            q.isNotEmpty() -> Find.normalize(q).let { nq -> folders.filter { Find.normalize(it.name).contains(nq) } }
+            folder == NO_FOLDER -> emptyList()
+            else -> lib.children(folder)
+        }
         if (q.isEmpty()) {
             snippets.clear()
             searchStatus.visibility = View.GONE
         }
-        adapter.submit(shown)
+        adapter.submit(cards, shown)
         folderTitle.text = when {
             q.isNotEmpty() -> "Buscar «$q»"
             folder == null -> getString(R.string.all_notes)
             folder == NO_FOLDER -> getString(R.string.no_folder)
-            else -> folders.first { it.id == folder }.name
+            else -> breadcrumb(folder!!)
         }
-        emptyView.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
+        emptyView.visibility = if (shown.isEmpty() && cards.isEmpty()) View.VISIBLE else View.GONE
         when {
             q.isNotEmpty() -> emptyView.text = "No aparece en ninguna nota."
             else -> emptyView.setText(if (folder == null) R.string.empty else R.string.empty_folder)
         }
 
         foldersBox.removeAllViews()
-        addFolderRow(getString(R.string.all_notes), R.drawable.ic_notes, notes.size, folder == null) { open(null) }
-        for (f in folders) {
-            val count = notes.count { it.folder == f.id }
-            addFolderRow(f.name, R.drawable.ic_folder, count, folder == f.id, onMenu = { folderMenu(it, f) }) { open(f.id) }
+        addFolderRow(getString(R.string.all_notes), R.drawable.ic_notes, notes.size, folder == null, depth = 0) { open(null) }
+        // El árbol: las de arriba de todo, y abiertas las que llevan a la carpeta que se ve.
+        val openPath = folder?.takeIf { it != NO_FOLDER }?.let { id -> lib.path(id).map { it.id }.toSet() }.orEmpty()
+        fun tree(parent: String?, depth: Int) {
+            for (f in lib.children(parent)) {
+                val inside = lib.subtree(f.id)
+                val count = notes.count { it.folder in inside }
+                addFolderRow(f.name, R.drawable.ic_folder, count, folder == f.id, depth = depth, onMenu = { folderMenu(it, f) }) { open(f.id) }
+                if (f.id in openPath) tree(f.id, depth + 1)
+            }
         }
+        tree(null, 0)
         if (folders.isNotEmpty()) {
-            addFolderRow(getString(R.string.no_folder), R.drawable.ic_folder, notes.count { it.folder == null }, folder == NO_FOLDER) {
+            addFolderRow(getString(R.string.no_folder), R.drawable.ic_folder, notes.count { it.folder == null }, folder == NO_FOLDER, depth = 0) {
                 open(NO_FOLDER)
             }
         }
-        addFolderRow(getString(R.string.new_folder), R.drawable.ic_folder_add, -1, false) { newFolder() }
+        val here = targetFolder()?.let { lib.folder(it)?.name }
+        addFolderRow(if (here != null) getString(R.string.new_folder_in, here) else getString(R.string.new_folder), R.drawable.ic_folder_add, -1, false, depth = 0) {
+            newFolder()
+        }
+        if (menuDark) Chrome.lighten(foldersBox)
     }
+
+    /** Color de las partes de la ruta que llevan a otra carpeta (con un fondo oscuro, más claro). */
+    private var crumbColor: Int? = null
+
+    /** "Todas las notas › Física › Termo", y cada parte lleva a esa carpeta. */
+    private fun breadcrumb(id: String): CharSequence {
+        val out = android.text.SpannableStringBuilder()
+        fun part(text: String, target: String?, last: Boolean) {
+            val start = out.length
+            out.append(text)
+            if (!last) {
+                out.setSpan(object : android.text.style.ClickableSpan() {
+                    override fun onClick(widget: View) = open(target)
+                    override fun updateDrawState(ds: android.text.TextPaint) {
+                        ds.color = crumbColor ?: getColor(R.color.muted)
+                        ds.isUnderlineText = false
+                    }
+                }, start, out.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                out.append("  ›  ")
+                out.setSpan(android.text.style.ForegroundColorSpan(crumbColor ?: getColor(R.color.muted)), out.length - 5, out.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        part(getString(R.string.all_notes), null, last = false)
+        val path = store.library.path(id)
+        for ((i, f) in path.withIndex()) part(f.name, f.id, last = i == path.lastIndex)
+        return out
+    }
+
+    /** "Física › Termo", para mostrar dónde está una carpeta o una nota. */
+    private fun pathName(id: String?): String? = id?.let { store.library.path(it).joinToString(" › ") { f -> f.name }.ifEmpty { null } }
 
     private fun open(id: String?) {
         folder = id
@@ -397,10 +506,20 @@ class MainActivity : TintaActivity() {
     }
 
     /** Una fila de la barra lateral; con `onMenu`, lleva un botón ⋮ (y mantenerla apretada hace lo mismo). */
-    private fun addFolderRow(name: String, icon: Int, count: Int, selected: Boolean, onMenu: ((View) -> Unit)? = null, onClick: () -> Unit) {
+    private fun addFolderRow(
+        name: String,
+        icon: Int,
+        count: Int,
+        selected: Boolean,
+        depth: Int,
+        onMenu: ((View) -> Unit)? = null,
+        onClick: () -> Unit,
+    ) {
         val row = TextView(this, null, 0, R.style.SidebarItem).apply {
             text = if (count >= 0) "$name  ·  $count" else name
             setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
+            // Las de adentro, corridas: se ve qué carpeta está dentro de cuál.
+            if (depth > 0) setPaddingRelative(paddingStart + dp(18f).toInt() * depth, paddingTop, paddingEnd, paddingBottom)
             isSelected = selected
             setOnClickListener { onClick() }
         }
@@ -428,45 +547,81 @@ class MainActivity : TintaActivity() {
         foldersBox.addView(line, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44f).toInt()))
     }
 
-    private fun newFolder() {
-        askText(getString(R.string.new_folder), "") { name ->
+    /** Una carpeta nueva dentro de la que está abierta (o arriba de todo). */
+    private fun newFolder(parent: String? = targetFolder()) {
+        val title = store.library.folder(parent)?.let { getString(R.string.new_folder_in, it.name) } ?: getString(R.string.new_folder)
+        askText(title, "") { name ->
             store.io.execute {
-                val f = store.library.create(name)
+                val f = store.library.create(name, parent)
                 runOnUiThread { open(f.id) }
             }
         }
     }
 
     private fun folderMenu(anchor: View, f: Library.Folder) {
+        val lib = store.library
+        val inside = lib.subtree(f.id)
+        val insideNotes = notes.filter { it.folder in inside }
+        val up = lib.parentOf(f.id)
         PopupMenu(this, anchor).apply {
             menu.add(R.string.rename).setOnMenuItemClickListener {
                 askText(getString(R.string.rename), f.name) { name ->
                     store.io.execute {
-                        store.library.rename(f.id, name)
+                        lib.rename(f.id, name)
                         runOnUiThread { showFolder() }
                     }
                 }
                 true
             }
+            menu.add(R.string.new_subfolder).setOnMenuItemClickListener {
+                newFolder(f.id)
+                true
+            }
+            menu.add(R.string.move_folder).setOnMenuItemClickListener {
+                moveFolder(f)
+                true
+            }
             menu.add(R.string.delete_folder_only).setOnMenuItemClickListener {
-                confirm(getString(R.string.delete_folder, f.name), getString(R.string.delete)) {
+                val where = lib.folder(up)?.name?.let { "«$it»" } ?: getString(R.string.no_folder).lowercase()
+                confirm(getString(R.string.delete_folder, f.name, where), getString(R.string.delete)) {
                     store.io.execute {
-                        store.library.delete(f.id)
+                        lib.delete(f.id)
+                        runOnUiThread { if (folder == f.id) folder = up }
                         refresh()
                     }
                 }
                 true
             }
-            val inside = notes.filter { it.folder == f.id }
-            if (inside.isNotEmpty()) {
-                val label = if (inside.size == 1) getString(R.string.delete_folder_and_note) else getString(R.string.delete_folder_and_notes, inside.size)
+            if (insideNotes.isNotEmpty()) {
+                val label = if (insideNotes.size == 1) getString(R.string.delete_folder_and_note) else getString(R.string.delete_folder_and_notes, insideNotes.size)
                 menu.add(label).setOnMenuItemClickListener {
-                    deleteFolderWithNotes(f, inside)
+                    deleteFolderWithNotes(f, insideNotes)
                     true
                 }
             }
             show()
         }
+    }
+
+    /** Pasa la carpeta (con lo que tiene) adentro de otra, o arriba de todo. */
+    private fun moveFolder(f: Library.Folder) {
+        val lib = store.library
+        val inside = lib.subtree(f.id)
+        val targets = lib.folders().filter { it.id !in inside }.map { it to (pathName(it.id) ?: it.name) }.sortedBy { it.second.lowercase() }
+        val names = (listOf(getString(R.string.top_level)) + targets.map { it.second }).toTypedArray()
+        val current = lib.parentOf(f.id)?.let { p -> targets.indexOfFirst { it.first.id == p } + 1 } ?: 0
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.move_folder_title, f.name))
+            .setSingleChoiceItems(names, current) { dialog, which ->
+                dialog.dismiss()
+                val target = if (which == 0) null else targets[which - 1].first.id
+                store.io.execute {
+                    lib.moveFolder(f.id, target)
+                    refresh()
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     /** Borra la carpeta y las notas que tiene (pide confirmación; las abiertas no se pueden borrar). */
@@ -485,9 +640,10 @@ class MainActivity : TintaActivity() {
             inside.forEach { NoteCache.drop(it.id) }
             store.io.execute {
                 inside.forEach { store.delete(it.id) }
-                store.library.delete(f.id)
+                val up = store.library.parentOf(f.id)
+                val gone = store.library.deleteTree(f.id)
                 runOnUiThread {
-                    if (folder == f.id) folder = null
+                    if (folder in gone) folder = up
                     refresh()
                 }
             }
@@ -500,13 +656,15 @@ class MainActivity : TintaActivity() {
             toast("Primero creá una carpeta en la barra de la izquierda")
             return
         }
-        val names = (folders.map { it.name } + getString(R.string.no_folder)).toTypedArray()
-        val current = folders.indexOfFirst { it.id == info.folder }.let { if (it < 0) folders.size else it }
+        // Con la ruta de cada una ("Física › Termo"), ordenadas por ruta.
+        val sorted = folders.map { it to (pathName(it.id) ?: it.name) }.sortedBy { it.second.lowercase() }
+        val names = (sorted.map { it.second } + getString(R.string.no_folder)).toTypedArray()
+        val current = sorted.indexOfFirst { it.first.id == info.folder }.let { if (it < 0) sorted.size else it }
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.move_to_folder).removeSuffix("…"))
             .setSingleChoiceItems(names, current) { dialog, which ->
                 dialog.dismiss()
-                val target = folders.getOrNull(which)?.id
+                val target = sorted.getOrNull(which)?.first?.id
                 store.io.execute {
                     store.library.move(info.id, target)
                     refresh()
@@ -557,7 +715,11 @@ class MainActivity : TintaActivity() {
                 val name = displayName(uri)
                 runCatching {
                     val title = name.substringBeforeLast('.')
-                    if (isPdf(uri, name)) {
+                    if (Exporter.isBundle(name) { contentResolver.openInputStream(uri) }) {
+                        val n = contentResolver.openInputStream(uri)?.use { Exporter.importBundle(store, it) } ?: error("no se pudo leer el archivo")
+                        store.library.move(n.id, target)
+                        "«${n.title}»: nota de Tinta, ${n.strokes.size} trazos"
+                    } else if (isPdf(uri, name)) {
                         val n = Imports.pdf(contentResolver, uri, store, title)
                         finishImport(n, target)
                         "«${n.title}»: ${n.images.size} páginas para escribir encima"
@@ -584,6 +746,17 @@ class MainActivity : TintaActivity() {
         }
     }
 
+    /** Exportar una nota de la lista: se lee del disco y se exporta. */
+    private fun export(info: NoteInfo, format: Exporter.Format) {
+        if (format != Exporter.Format.TEXT) hint(getString(R.string.exporting))
+        store.io.execute {
+            val n = runCatching { store.load(info.id) }.getOrNull()
+            runOnUiThread {
+                if (n == null) toast("No se pudo abrir la nota", long = true) else Exporter.start(this, store, n, format) { it() }
+            }
+        }
+    }
+
     private fun isPdf(uri: Uri, name: String): Boolean {
         if (name.endsWith(".pdf", ignoreCase = true) || contentResolver.getType(uri) == "application/pdf") return true
         // Sin nombre ni tipo confiables: los PDF empiezan con "%PDF".
@@ -594,7 +767,7 @@ class MainActivity : TintaActivity() {
 
     private fun finishImport(n: Note, folder: String?) {
         store.write(n.id, store.header(n), n.strokes, n.images, n.texts, n.widgets)
-        store.writeThumbnail(n.id, Render.thumbnail(n.strokes, n.images, n.texts, n.widgets, n.background, n.pages, 480, 360))
+        store.writeThumbnail(n.id, Render.thumbnail(n.strokes, n.images, n.texts, n.widgets, n.background, n.pages, 480, 360, n.paperColor))
         store.library.move(n.id, folder)
     }
 
@@ -613,7 +786,10 @@ class MainActivity : TintaActivity() {
                 true
             }
             menu.add(R.string.move_to_folder).setOnMenuItemClickListener { moveToFolder(info); true }
-            menu.add(R.string.export_pdf).setOnMenuItemClickListener { exportPdf(info); true }
+            menu.add(R.string.export).setOnMenuItemClickListener {
+                Popups.exportFormats(this@MainActivity, anchor) { f -> export(info, f) }
+                true
+            }
             menu.add(R.string.delete).setOnMenuItemClickListener {
                 if (EditorActivity.isOpen(info.id)) {
                     toast(getString(R.string.close_first))
@@ -650,37 +826,74 @@ class MainActivity : TintaActivity() {
         }
     }
 
-    private fun exportPdf(info: NoteInfo) {
-        hint("Generando PDF…")
-        store.io.execute {
-            val result = runCatching {
-                val note = store.load(info.id)
-                Render.pdf(this, note.title, note.strokes, note.images, note.texts, note.widgets, note.background, note.pages)
-            }
-            runOnUiThread {
-                result.onSuccess { sharePdf(it) }
-                    .onFailure { toast("No se pudo exportar: ${it.message}", long = true) }
-            }
-        }
-    }
-
     // --- Lista ---
 
-    private inner class NotesAdapter : RecyclerView.Adapter<NotesAdapter.Holder>() {
+    /** Primero las carpetas de este nivel (como en un explorador de archivos) y después las notas. */
+    private inner class NotesAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        private var folders: List<Library.Folder> = emptyList()
         private var items: List<NoteInfo> = emptyList()
 
-        fun submit(notes: List<NoteInfo>) {
+        var columns = 2
+
+        /** Columnas que faltan para completar la fila de las carpetas (0: no hace falta hueco). */
+        val gapSpan get() = if (folders.isEmpty() || items.isEmpty()) 0 else (columns - folders.size % columns) % columns
+        private val gaps get() = if (gapSpan > 0) 1 else 0
+
+        fun isGap(position: Int) = gaps == 1 && position == folders.size
+
+        fun submit(cards: List<Library.Folder>, notes: List<NoteInfo>) {
+            folders = cards
             items = notes
             @Suppress("NotifyDataSetChanged") // lista corta; se recarga entera al volver a la pantalla
             notifyDataSetChanged()
         }
 
-        override fun getItemCount() = items.size
+        override fun getItemCount() = folders.size + gaps + items.size
 
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
-            Holder(LayoutInflater.from(parent.context).inflate(R.layout.item_note, parent, false))
+        override fun getItemViewType(position: Int) = when {
+            position < folders.size -> FOLDER
+            isGap(position) -> GAP
+            else -> NOTE
+        }
 
-        override fun onBindViewHolder(holder: Holder, position: Int) = holder.bind(items[position])
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val inflater = LayoutInflater.from(parent.context)
+            return when (viewType) {
+                FOLDER -> FolderHolder(inflater.inflate(R.layout.item_folder, parent, false))
+                GAP -> object : RecyclerView.ViewHolder(View(parent.context).apply { layoutParams = RecyclerView.LayoutParams(1, 1) }) {}
+                else -> Holder(inflater.inflate(R.layout.item_note, parent, false))
+            }
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            when (holder) {
+                is FolderHolder -> holder.bind(folders[position])
+                is Holder -> holder.bind(items[position - folders.size - gaps])
+            }
+        }
+
+        inner class FolderHolder(view: View) : RecyclerView.ViewHolder(view) {
+            private val title: TextView = view.findViewById(R.id.title)
+            private val meta: TextView = view.findViewById(R.id.meta)
+            private val more: View = view.findViewById(R.id.more)
+
+            fun bind(f: Library.Folder) {
+                val lib = store.library
+                title.text = f.name
+                val inside = lib.subtree(f.id)
+                val n = notes.count { it.folder in inside }
+                val subs = lib.children(f.id).size
+                meta.text = listOfNotNull(
+                    if (n == 1) "1 nota" else "$n notas",
+                    if (subs == 0) null else if (subs == 1) "1 carpeta" else "$subs carpetas",
+                    // Al buscar, dónde está.
+                    if (query.isNotEmpty()) lib.parentOf(f.id)?.let(::pathName) else null,
+                ).joinToString(" · ")
+                itemView.setOnClickListener { open(f.id) }
+                itemView.setOnLongClickListener { folderMenu(more, f); true }
+                more.setOnClickListener { folderMenu(it, f) }
+            }
+        }
 
         inner class Holder(view: View) : RecyclerView.ViewHolder(view) {
             private val thumb: ImageView = view.findViewById(R.id.thumb)
@@ -695,7 +908,7 @@ class MainActivity : TintaActivity() {
             fun bind(info: NoteInfo) {
                 title.text = info.title
                 val ago = DateUtils.getRelativeTimeSpanString(info.modified, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
-                val where = if (folder == null) store.library.folders().firstOrNull { it.id == info.folder }?.name else null
+                val where = if (folder == null) pathName(info.folder) else null
                 meta.text = snippets[info.id] ?: listOfNotNull(ago, "${info.strokeCount} trazos", where).joinToString(" · ")
                 itemView.setOnClickListener { openNote(info.id) }
                 itemView.setOnLongClickListener { showMenu(more, info); true }
@@ -717,6 +930,9 @@ class MainActivity : TintaActivity() {
     }
 
     private companion object {
+        const val FOLDER = 0
+        const val NOTE = 1
+        const val GAP = 2
         const val NO_FOLDER = "-"
         const val SEARCH_DELAY_MS = 300L
         const val REFILTER_MS = 400L

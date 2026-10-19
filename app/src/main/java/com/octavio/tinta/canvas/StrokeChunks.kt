@@ -2,9 +2,13 @@ package com.octavio.tinta.canvas
 
 import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.RenderNode
+import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.InkStroke
+import com.octavio.tinta.model.Tool
 import java.util.IdentityHashMap
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -111,6 +115,19 @@ class StrokeChunks {
             c.built = built
         }
         opened = true
+    }
+
+    /**
+     * Cuando la ventana deja de verse (otra app encima), Android borra lo grabado en todos los
+     * nodos. Al volver, las tandas creen que siguen grabadas y la nota se ve vacía. Si se perdió la
+     * grabación del nodo raíz, se perdieron todas: se marcan para volver a grabarlas. Devuelve true
+     * si pasó.
+     */
+    fun recoverLost(): Boolean {
+        if (rootDirty || root.hasDisplayList()) return false
+        rootDirty = true
+        for (c in chunks) if (c.recorded && !c.node.hasDisplayList()) c.recorded = false
+        return true
     }
 
     /** Ya pasó la primera sincronización: lo que cambie desde ahora se tiene que ver enseguida. */
@@ -227,7 +244,12 @@ class StrokeChunks {
         rc.translate(-left.toFloat(), -top.toFloat())
         // La matriz sólo le dice a Ink la escala en pantalla, para el antialiasing.
         identity.setScale(scale, scale)
-        InkDraw.use { r -> for (s in c.members) r.draw(rc, s.display(dark) ?: continue, identity) }
+        InkDraw.use { r ->
+            for (s in c.members) {
+                val mesh = s.display(dark)
+                if (mesh != null) r.draw(rc, mesh, identity) else drawRough(rc, s)
+            }
+        }
         c.node.endRecording()
         val box = RectF(c.left, c.top, c.right, c.bottom)
         val target = if (urgent) urgentDamage else damage
@@ -237,6 +259,30 @@ class StrokeChunks {
         c.recordedScale = scale
         c.contentDirty = false
         c.meshDirty = false
+    }
+
+    private val roughPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val roughPath = Path()
+
+    /**
+     * Un trazo cuya malla todavía no se armó (al abrir una nota grande se arman de a miles en
+     * segundo plano): una línea por sus puntos, del grosor y el color del trazo. Así la nota se ve
+     * enseguida en vez de vacía; cuando llega la malla, la tanda se vuelve a grabar con el trazo
+     * de verdad.
+     */
+    private fun drawRough(canvas: Canvas, s: InkStroke) {
+        val p = runCatching { s.points() }.getOrNull() ?: return
+        if (p.size < 2) return
+        roughPath.rewind()
+        roughPath.moveTo(p[0], p[1])
+        if (p.size == 2) roughPath.lineTo(p[0] + 0.01f, p[1]) else for (k in 1 until p.size / 2) roughPath.lineTo(p[2 * k], p[2 * k + 1])
+        roughPaint.color = Appearance.ink(s.color, s.tool, dark)
+        roughPaint.strokeWidth = s.size * if (s.tool == Tool.PEN) ROUGH_PEN_WIDTH else 1f
+        canvas.drawPath(roughPath, roughPaint)
     }
 
     /** La tanda para un trazo nuevo: la última, salvo que esté llena o muy lejos. */
@@ -289,6 +335,9 @@ class StrokeChunks {
          * compactas tocan menos baldosas: repintar una baldosa reproduce las tandas enteras.
          */
         const val FAR = 300f
+
+        /** Ancho de la línea provisoria de la pluma, por su grosor (la presión la hace variar). */
+        const val ROUGH_PEN_WIDTH = 0.8f
 
         /** Regrabar si el zoom cambió más de ×1,6 desde la grabación (antialiasing de Ink). */
         val REZOOM = ln(1.6f)

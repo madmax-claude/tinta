@@ -32,6 +32,38 @@ class Prefs(context: Context) {
             ?: if (p.getBoolean("eraser", false)) NoteCanvasView.Mode.ERASER else NoteCanvasView.Mode.PEN
         set(v) = p.edit { putInt("mode", v.ordinal) }
 
+    /** El orden de las herramientas de la barra lateral (las que no estén, al final). */
+    var dockOrder: List<com.octavio.tinta.ui.ToolDock.Tool>
+        get() = p.getString("dockOrder", null)?.split(',')?.mapNotNull { n -> com.octavio.tinta.ui.ToolDock.Tool.entries.firstOrNull { it.name == n } }.orEmpty()
+        set(v) = p.edit { putString("dockOrder", v.joinToString(",") { it.name }) }
+
+    /** Color de hoja para las notas nuevas (el último elegido), o null para el de siempre. */
+    var newPaperColor: Int?
+        get() = p.getInt("newPaperColor", 0).takeIf { it != 0 }
+        set(v) = p.edit { putInt("newPaperColor", v ?: 0) }
+
+    /** Colores de la interfaz elegidos en Configuración (null: los de siempre). */
+    var topBarColor: Int?
+        get() = p.getInt("topBarColor", 0).takeIf { it != 0 }
+        set(v) = p.edit { putInt("topBarColor", v ?: 0) }
+    var toolsColor: Int?
+        get() = p.getInt("toolsColor", 0).takeIf { it != 0 }
+        set(v) = p.edit { putInt("toolsColor", v ?: 0) }
+    var tabColor: Int?
+        get() = p.getInt("tabColor", 0).takeIf { it != 0 }
+        set(v) = p.edit { putInt("tabColor", v ?: 0) }
+
+    /** Menú principal: la barra de carpetas y el fondo de la lista de notas. */
+    var menuColor: Int?
+        get() = p.getInt("menuColor", 0).takeIf { it != 0 }
+        set(v) = p.edit { putInt("menuColor", v ?: 0) }
+    var listColor: Int?
+        get() = p.getInt("listColor", 0).takeIf { it != 0 }
+        set(v) = p.edit { putInt("listColor", v ?: 0) }
+
+    /** Todo lo de Configuración que cambia cómo se arma la pantalla (si cambia, se vuelve a armar). */
+    val look: String get() = "$helpMessages/$topBarColor/$toolsColor/$tabColor/$menuColor/$listColor"
+
     /** Mostrar los mensajes de ayuda ([Help]). */
     var helpMessages: Boolean
         get() = p.getBoolean("helpMessages", true)
@@ -159,10 +191,15 @@ open class TintaActivity : ComponentActivity() {
     var helpShown = true
         private set
 
+    /** Cómo estaba [Prefs.look] al armar esta pantalla. */
+    var lookShown = ""
+        private set
+
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(newBase)
         Help.on = Prefs(newBase).helpMessages
         helpShown = Help.on
+        lookShown = Prefs(newBase).look
         val night = if (Prefs(newBase).dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
         val base = newBase.resources.configuration.uiMode
         applyOverrideConfiguration(Configuration().apply { uiMode = (base and Configuration.UI_MODE_NIGHT_MASK.inv()) or night })

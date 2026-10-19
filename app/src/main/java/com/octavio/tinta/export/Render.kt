@@ -59,6 +59,7 @@ object Render {
         pages: PageLayout,
         width: Int,
         height: Int,
+        paperColor: Int? = null,
     ): Bitmap {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -76,7 +77,7 @@ object Render {
             scale = min(width / max((b?.width() ?: 0f) + MARGIN, 1f), 1.5f)
         }
         val count = pages.count(b?.bottom ?: Float.NaN)
-        draw(canvas, strokes, images, texts, widgets, 512, background, pages, count, scale, -left * scale, -top * scale, width.toFloat(), height.toFloat(), Paper())
+        draw(canvas, strokes, images, texts, widgets, 512, background, pages, count, scale, -left * scale, -top * scale, width.toFloat(), height.toFloat(), Paper(color = paperColor))
         return bitmap
     }
 
@@ -94,15 +95,16 @@ object Render {
         widgets: List<Widget>,
         background: Background,
         pages: PageLayout,
+        paperColor: Int? = null,
     ): File {
-        if (pages.paged) return pagedPdf(context, title, strokes, images, texts, widgets, background, pages)
+        if (pages.paged) return pagedPdf(context, title, strokes, images, texts, widgets, background, pages, paperColor)
         val b = bounds(strokes, images, texts, widgets) ?: RectF(0f, 0f, 595f - 2 * MARGIN, 842f - 2 * MARGIN)
         val w = b.width() + 2 * MARGIN
         val h = b.height() + 2 * MARGIN
         val scale = min(1f, PDF_MAX_PT / max(w, h))
         val pageWidth = ceil(w * scale).toInt()
         val pageHeight = ceil(h * scale).toInt()
-        val paper = Paper(vector = true)
+        val paper = Paper(vector = true, color = paperColor)
         val doc = PdfDocument()
         try {
             val page = doc.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create())
@@ -125,13 +127,14 @@ object Render {
         widgets: List<Widget>,
         background: Background,
         pages: PageLayout,
+        paperColor: Int?,
     ): File {
         val used = pages.used(bounds(strokes, images, texts, widgets)?.bottom ?: Float.NaN)
         // 160 dp por pulgada, 72 pt por pulgada: la hoja sale del tamaño real.
         val scale = 72f / 160f
         val pageWidth = (pages.width * scale).toInt()
         val pageHeight = (pages.height * scale).toInt()
-        val paper = Paper(vector = true)
+        val paper = Paper(vector = true, color = paperColor)
         val doc = PdfDocument()
         try {
             for (k in 0 until used) {
@@ -219,13 +222,14 @@ object Render {
         pageCount: Int,
         r: RectF,
         scale: Float,
+        paperColor: Int? = null,
     ): Bitmap {
         val width = ceil(r.width() * scale).toInt().coerceAtLeast(1)
         val height = ceil(r.height() * scale).toInt().coerceAtLeast(1)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         draw(
             Canvas(bitmap), strokes, images, texts, widgets, 2048, background, pages, pageCount, scale,
-            -r.left * scale, -r.top * scale, width.toFloat(), height.toFloat(), Paper(),
+            -r.left * scale, -r.top * scale, width.toFloat(), height.toFloat(), Paper(color = paperColor),
         )
         return bitmap
     }
@@ -240,13 +244,14 @@ object Render {
         pages: PageLayout,
         k: Int,
         width: Int,
+        paperColor: Int? = null,
     ): Bitmap {
         val scale = width / pages.width
         val height = (pages.height * scale).toInt().coerceAtLeast(1)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         draw(
             Canvas(bitmap), strokes, images, texts, widgets, 256, background, pages, k + 1, scale,
-            -pages.left * scale, -pages.pageTop(k) * scale, width.toFloat(), height.toFloat(), Paper(),
+            -pages.left * scale, -pages.pageTop(k) * scale, width.toFloat(), height.toFloat(), Paper(color = paperColor),
         )
         return bitmap
     }

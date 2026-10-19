@@ -43,8 +43,8 @@ class NoteStore private constructor(context: Context) {
     fun newId(): String = UUID.randomUUID().toString()
 
     /** Una nota vacía, ya guardada y en la carpeta `folder`. El editor la puede abrir enseguida. */
-    fun create(title: String, background: Background, pages: PageLayout, folder: String?): Note {
-        val note = Note(newId(), title, background, pages = pages)
+    fun create(title: String, background: Background, pages: PageLayout, folder: String?, paperColor: Int? = null): Note {
+        val note = Note(newId(), title, background, pages = pages, paperColor = paperColor)
         save(note, withThumbnail = false)
         io.execute { library.move(note.id, folder) } // en el mismo hilo, antes de que el editor la cargue
         return note
@@ -103,7 +103,7 @@ class NoteStore private constructor(context: Context) {
             runCatching {
                 write(id, header, strokes, images, texts, widgets)
                 if (withThumbnail) {
-                    writeThumbnail(id, Render.thumbnail(strokes, images, texts, widgets, header.background, header.pages, 480, 360))
+                    writeThumbnail(id, Render.thumbnail(strokes, images, texts, widgets, header.background, header.pages, 480, 360, header.paperColor))
                 }
             }.onFailure(onError)
         }
@@ -111,6 +111,7 @@ class NoteStore private constructor(context: Context) {
 
     fun header(note: Note) = NoteFormat.Header(
         note.title, note.background, note.created, note.modified, note.viewport, note.strokes.size, note.pages,
+        paperColor = note.paperColor,
     )
 
     /** Escribe la nota completa de forma atómica. Llamar desde [io]. */
@@ -144,7 +145,7 @@ class NoteStore private constructor(context: Context) {
         fun readNote(file: File, id: String, media: File): Note = BufferedInputStream(file.inputStream(), 1 shl 16).use { bin ->
             val t0 = System.nanoTime()
             val h = NoteFormat.readHeader(DataInputStream(bin))
-            val note = Note(id, h.title, h.background, h.created, h.modified, h.viewport, h.pages)
+            val note = Note(id, h.title, h.background, h.created, h.modified, h.viewport, h.pages, paperColor = h.paperColor)
             NoteFormat.strokeInput(bin).use { data ->
                 repeat(h.strokeCount) {
                     val r = NoteFormat.readStroke(data)

@@ -22,8 +22,8 @@ class Overview(private val onReady: () -> Unit) {
 
     private class Band(val bitmap: Bitmap, val rect: RectF)
 
-    /** Lo último que se armó; se reemplaza entero al terminar otra versión. */
-    private class Image(val bands: List<Band>, val scale: Float, val version: Int)
+    /** Lo último que se armó (con los trazos de los que salió); se reemplaza entero al terminar otra versión. */
+    private class Image(val bands: List<Band>, val scale: Float, val version: Int, val source: List<InkStroke>)
 
     @Volatile private var image: Image? = null
 
@@ -87,6 +87,22 @@ class Overview(private val onReady: () -> Unit) {
 
     fun shutdown() = worker.shutdownNow()
 
+    /**
+     * Si todo lo que muestra la imagen sigue en la nota (identidad de los trazos). Con algo
+     * borrado o movido después de armarla, debajo se vería lo viejo junto a lo nuevo: entonces no
+     * se usa hasta que se rehaga. Que falten trazos nuevos no molesta: llegan con las baldosas.
+     */
+    fun shows(current: List<InkStroke>): Boolean {
+        val img = image ?: return false
+        if (img.source.size > current.size) return false
+        val now = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<InkStroke, Boolean>(current.size * 2))
+        now.addAll(current)
+        return img.source.all { it in now }
+    }
+
+    /** Cambia con cada imagen nueva (para no volver a revisar [shows] en cada cuadro). */
+    val stamp: Any? get() = image
+
     private fun build(strokes: List<InkStroke>, version: Int, dark: Boolean): Image? {
         var l = Float.POSITIVE_INFINITY
         var t = Float.POSITIVE_INFINITY
@@ -128,7 +144,7 @@ class Overview(private val onReady: () -> Unit) {
             if (gpu != null) bitmap.recycle()
             Band(gpu ?: bitmap, RectF(l, top, l + width / scale, bottom))
         }
-        return Image(bands, scale, version)
+        return Image(bands, scale, version, strokes)
     }
 
     private companion object {

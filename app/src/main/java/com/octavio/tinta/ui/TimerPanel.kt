@@ -91,6 +91,13 @@ class TimerPanel(context: Context) : LinearLayout(context) {
     var onMoved: ((Float, Float) -> Unit)? = null
 
     private val time = TextView(context)
+
+    /** Color del tiempo (cambia con el color elegido para las barras). */
+    var textColor = context.getColor(R.color.ink)
+        set(value) {
+            field = value
+            update()
+        }
     private val play = ImageButton(context)
     private val options = LinearLayout(context)
     private val modeCountdown = chip("Cuenta regresiva")
@@ -225,7 +232,7 @@ class TimerPanel(context: Context) : LinearLayout(context) {
     private fun update() {
         time.text = TimerState.text()
         val done = TimerState.finished
-        time.setTextColor(if (done) 0xFFD93025.toInt() else context.getColor(R.color.ink))
+        time.setTextColor(if (done) 0xFFD93025.toInt() else textColor)
         play.setImageResource(if (TimerState.running) R.drawable.ic_pause else R.drawable.ic_play)
         play.contentDescription = if (TimerState.running) "Pausar" else "Empezar"
         modeCountdown.isSelected = TimerState.countdown

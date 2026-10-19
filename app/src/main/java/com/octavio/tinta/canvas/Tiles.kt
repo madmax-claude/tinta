@@ -191,6 +191,11 @@ class Tiles(private val density: Float) {
         var missing = false
         for (t in wanted) {
             t.frame = frame
+            // Android borró lo grabado (la ventana dejó de verse): hay que pintarla de nuevo.
+            if (t.ready && !t.node.hasDisplayList()) {
+                t.ready = false
+                t.dirty = true
+            }
             if (t.ready && !t.dirty) continue
             val inside = t.ix in ix0..ix1 && t.iy in iy0..iy1
             val cost = content.cost(t.left, t.top, t.right, t.bottom) + 1

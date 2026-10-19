@@ -2,7 +2,6 @@ package com.octavio.tinta.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -15,9 +14,7 @@ import com.octavio.tinta.canvas.NoteCanvasView
 import com.octavio.tinta.dp
 import com.octavio.tinta.tip
 import com.octavio.tinta.model.Pen
-import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.roundToInt
 
 /**
  * Barra de herramientas que flota sobre la hoja. Se arrastra desde la manija a cualquier lugar; un
@@ -128,7 +125,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
             val b = PenButton(context, dark)
             val index = penButtons.size
             b.setOnClickListener { callbacks?.onPenClick(index, it) }
-            setupPenDrag(b, index)
+            penOrder.attach(b)
             penButtons.add(b)
             pensBox.addView(b, itemParams())
         }
@@ -144,113 +141,21 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
 
     fun penButton(index: Int): View? = penButtons.getOrNull(index)
 
-    /**
-     * Mantener apretado un lápiz lo levanta: arrastrándolo se cambia de lugar entre los otros (que
-     * se corren para hacerle lugar). Si se suelta sin moverlo, se ofrecen sus opciones.
-     */
-    @SuppressLint("ClickableViewAccessibility")
-    private fun setupPenDrag(b: PenButton, index: Int) {
-        val slop = ViewConfiguration.get(context).scaledTouchSlop
-        var downX = 0f
-        var downY = 0f
-        var lifted = false
-        var moved = false
-        var target = index
-        val lift = Runnable {
-            lifted = true
-            target = index
-            b.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-            b.translationZ = context.dp(8f)
-            b.animate().scaleX(LIFT_SCALE).scaleY(LIFT_SCALE).setDuration(120).start()
-            b.parent?.requestDisallowInterceptTouchEvent(true)
-        }
-        b.setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX = e.rawX
-                    downY = e.rawY
-                    lifted = false
-                    moved = false
-                    v.isPressed = true
-                    v.postDelayed(lift, ViewConfiguration.getLongPressTimeout().toLong())
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (!lifted) {
-                        if (hypot(e.rawX - downX, e.rawY - downY) > slop) {
-                            v.removeCallbacks(lift)
-                            v.isPressed = false
-                        }
-                    } else {
-                        // Sigue al dedo a lo largo de la barra, sin salirse de los lápices.
-                        val slot = (if (vertical) v.height else v.width).toFloat().coerceAtLeast(1f)
-                        val d = if (vertical) e.rawY - downY else e.rawX - downX
-                        val off = d.coerceIn(-index * slot, (penButtons.lastIndex - index) * slot)
-                        if (vertical) v.translationY = off else v.translationX = off
-                        if (abs(d) > slop) moved = true
-                        val now = (index + (off / slot).roundToInt()).coerceIn(0, penButtons.lastIndex)
-                        if (now != target) {
-                            target = now
-                            makeRoom(index, target, slot)
-                        }
-                    }
-                }
-                MotionEvent.ACTION_UP -> {
-                    v.removeCallbacks(lift)
-                    v.isPressed = false
-                    if (!lifted) {
-                        if (hypot(e.rawX - downX, e.rawY - downY) <= slop) v.performClick()
-                    } else {
-                        settle()
-                        when {
-                            target != index -> callbacks?.onPenMoved(index, target)
-                            !moved -> callbacks?.onPenLongClick(index, v)
-                        }
-                    }
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    v.removeCallbacks(lift)
-                    v.isPressed = false
-                    if (lifted) settle()
-                }
-            }
-            true
-        }
-    }
+    /** Mantener apretado un lápiz y arrastrarlo lo cambia de lugar; soltarlo sin moverlo, sus opciones. */
+    private val penOrder = Reorder(
+        items = { penButtons },
+        vertical = { vertical },
+        slot = { v -> (if (vertical) v.height else v.width).toFloat() },
+        onMoved = { from, to -> callbacks?.onPenMoved(from, to) },
+        onHeld = { i, v -> callbacks?.onPenLongClick(i, v) },
+    )
 
-    /** Corre los otros lápices para dejar el lugar `to` libre al que se arrastra desde `from`. */
-    private fun makeRoom(from: Int, to: Int, slot: Float) {
-        for ((i, other) in penButtons.withIndex()) {
-            if (i == from) continue
-            val shift = when {
-                from < to && i in from + 1..to -> -slot
-                from > to && i in to until from -> slot
-                else -> 0f
-            }
-            if (vertical) other.animate().translationY(shift).setDuration(120).start() else other.animate().translationX(shift).setDuration(120).start()
-        }
-    }
-
-    /** Todo a su lugar (el orden nuevo lo pone [setPens]). */
-    private fun settle() {
-        for (other in penButtons) {
-            other.animate().cancel()
-            other.translationX = 0f
-            other.translationY = 0f
-            other.translationZ = 0f
-            other.scaleX = 1f
-            other.scaleY = 1f
-        }
-    }
 
     fun setUndoState(canUndo: Boolean, canRedo: Boolean) {
         undo.isEnabled = canUndo
         redo.isEnabled = canRedo
         undo.alpha = if (canUndo) 1f else 0.35f
         redo.alpha = if (canRedo) 1f else 0.35f
-    }
-
-    private companion object {
-        const val LIFT_SCALE = 1.18f
     }
 
     private fun itemParams(): LayoutParams {

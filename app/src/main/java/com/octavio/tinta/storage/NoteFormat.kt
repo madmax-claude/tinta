@@ -48,7 +48,7 @@ import java.util.zip.InflaterInputStream
  */
 object NoteFormat {
     const val MAGIC = "TINTA"
-    const val VERSION = 7
+    const val VERSION = 8
 
     data class Header(
         val title: String,
@@ -59,6 +59,8 @@ object NoteFormat {
         val strokeCount: Int,
         val pages: PageLayout = PageLayout(),
         val version: Int = VERSION,
+        /** Desde la versión 8: el color de la hoja, o null para el de siempre. */
+        val paperColor: Int? = null,
     )
 
     /** Un trazo tal como está en el archivo, sin convertir a objetos de Ink. */
@@ -94,6 +96,7 @@ object NoteFormat {
         out.writeInt(h.pages.minPages)
         out.writeFloat(h.viewport.width)
         out.writeFloat(h.viewport.height)
+        out.writeInt(h.paperColor ?: 0)
     }
 
     fun readHeader(input: DataInputStream): Header {
@@ -115,7 +118,8 @@ object NoteFormat {
         if (version >= 4) pages = pages.copy(customWidth = input.readFloat(), customHeight = input.readFloat())
         if (version >= 5) pages = pages.copy(minPages = input.readInt().coerceIn(0, MAX_PAGES))
         if (version >= 6) viewport = viewport.copy(width = input.readFloat(), height = input.readFloat())
-        return Header(title, background, created, modified, viewport, strokeCount, pages, version)
+        val paperColor = if (version >= 8) input.readInt().takeIf { it != 0 } else null
+        return Header(title, background, created, modified, viewport, strokeCount, pages, version, paperColor)
     }
 
     /** Herramienta y sensibilidad en un byte. */

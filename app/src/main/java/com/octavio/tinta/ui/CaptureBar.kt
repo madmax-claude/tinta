@@ -28,7 +28,7 @@ class CaptureBar(context: Context) : LinearLayout(context) {
     init {
         orientation = HORIZONTAL
         background = context.getDrawable(R.drawable.bg_toolbar)
-        elevation = context.dp(6f)
+        elevation = context.dp(12f) // encima del reloj y de las barras fijas: aparece donde se trabaja
         val pad = context.dp(3f).toInt()
         setPadding(pad, pad, pad, pad)
         add(R.drawable.ic_copy, "Copiar (para pegarla en una nota o en otra app)") { callbacks?.onCaptureCopy() }

@@ -42,6 +42,8 @@ class Note(
     val texts: MutableList<NoteText> = mutableListOf(),
     /** Gráficos, figuras 3D, notas de voz y videos. */
     val widgets: MutableList<Widget> = mutableListOf(),
+    /** Color de la hoja (ARGB), o null para el de siempre. En modo oscuro se ve oscura igual. */
+    var paperColor: Int? = null,
 )
 
 /**

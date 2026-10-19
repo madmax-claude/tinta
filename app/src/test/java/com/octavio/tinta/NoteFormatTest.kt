@@ -21,6 +21,7 @@ class NoteFormatTest {
         val header = NoteFormat.Header(
             "Análisis II — clase 3", Background.ERRORS, 1L, 2L, Viewport(-10f, 20f, 1.5f, 1472f, 1700f), 1,
             PageLayout(PageSize.CUSTOM, landscape = true, left = -48f, top = 12.5f, customWidth = 254f, customHeight = 190.5f, minPages = 7),
+            paperColor = 0xFFFFF6D5.toInt(),
         )
         val stroke = NoteFormat.RawStroke(2, 0x66FFE600, 16f, 0.1f, -5f, 10f, 20f, 30.5f, byteArrayOf(1, 2, 3))
         val bytes = ByteArrayOutputStream().also { buf ->
@@ -90,5 +91,14 @@ class NoteFormatTest {
     fun rejectsOtherFiles() {
         val bytes = ByteArrayOutputStream().also { DataOutputStream(it).writeUTF("TRY") }.toByteArray()
         NoteFormat.readHeader(DataInputStream(ByteArrayInputStream(bytes)))
+    }
+
+    @Test
+    fun withoutPaperColorReadsNull() {
+        val header = NoteFormat.Header("Sin color", Background.GRID, 1L, 2L, Viewport(), 0)
+        val bytes = ByteArrayOutputStream().also { buf -> DataOutputStream(buf).use { NoteFormat.writeHeader(it, header) } }.toByteArray()
+        val back = DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readHeader(it) }
+        assertEquals(null, back.paperColor)
+        assertEquals(header, back)
     }
 }

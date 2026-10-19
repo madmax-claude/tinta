@@ -27,6 +27,7 @@ class PageThumbs(private val widthPx: Int) {
         val widgets: List<Widget>,
         val background: Background,
         val pages: PageLayout,
+        val paperColor: Int? = null,
     )
 
     /** Avisa (en el hilo de la pantalla) que está lista la miniatura de la hoja `k`. */
@@ -95,7 +96,7 @@ class PageThumbs(private val widthPx: Int) {
             }
             if (s == null || sig == null) return@execute
             if (synchronized(lock) { cache[k]?.signature } == sig) return@execute
-            val bitmap = runCatching { Render.page(s.strokes, s.images, s.texts, s.widgets, s.background, s.pages, k, widthPx) }.getOrNull()
+            val bitmap = runCatching { Render.page(s.strokes, s.images, s.texts, s.widgets, s.background, s.pages, k, widthPx, s.paperColor) }.getOrNull()
                 ?: return@execute
             synchronized(lock) { cache[k] = Thumb(sig, bitmap) }
             main.post { onReady?.invoke(k) }
@@ -122,7 +123,7 @@ class PageThumbs(private val widthPx: Int) {
         return sig
     }
 
-    private fun base(s: Snapshot) = s.background.id * 7919 + s.pages.hashCode()
+    private fun base(s: Snapshot) = s.background.id * 7919 + s.pages.hashCode() + (s.paperColor ?: 0) * 31
 
     private companion object {
         const val MAX_THUMBS = 60

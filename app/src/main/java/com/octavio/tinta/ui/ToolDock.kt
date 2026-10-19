@@ -38,6 +38,9 @@ class ToolDock(context: Context) : FrameLayout(context) {
     interface Callbacks {
         fun onDockTool(tool: Tool, button: View)
         fun onDockChanged(right: Boolean, collapsed: Boolean)
+
+        /** Se cambió el orden de las herramientas (mantener apretada una y arrastrarla). */
+        fun onDockOrder(order: List<Tool>)
     }
 
     var callbacks: Callbacks? = null
@@ -50,6 +53,21 @@ class ToolDock(context: Context) : FrameLayout(context) {
     private val panel = LinearLayout(context)
     private val tab = ImageView(context)
     private val buttons = HashMap<Tool, View>()
+
+    /** Las herramientas en el orden en que se ven. */
+    private val order = ArrayList(Tool.entries)
+    private val itemSlot = context.dp(54f) // alto de cada una más su margen
+
+    private val reorder = Reorder(
+        items = { order.mapNotNull { buttons[it] } },
+        vertical = { true },
+        slot = { itemSlot },
+        onMoved = { from, to ->
+            order.add(to, order.removeAt(from))
+            arrange()
+            callbacks?.onDockOrder(order.toList())
+        },
+    )
     private val hide = ImageButton(context)
     private val side = ImageButton(context)
 
@@ -92,6 +110,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
                 })
                 setOnClickListener { callbacks?.onDockTool(t, this) }
             }
+            reorder.attach(item)
             buttons[t] = item
             panel.addView(item, LinearLayout.LayoutParams(context.dp(64f).toInt(), context.dp(52f).toInt()).apply {
                 topMargin = context.dp(2f).toInt()
@@ -107,6 +126,28 @@ class ToolDock(context: Context) : FrameLayout(context) {
         addView(panel, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL))
         addView(tab, LayoutParams(context.dp(22f).toInt(), context.dp(72f).toInt(), Gravity.CENTER_VERTICAL))
         apply()
+    }
+
+    /** El color elegido para las barras de herramientas. */
+    fun paint(color: Int) {
+        Chrome.paint(panel, color)
+        Chrome.paint(tab, color)
+    }
+
+    /** Pone las herramientas en este orden (las que falten, al final como siempre). */
+    fun setOrder(saved: List<Tool>) {
+        order.clear()
+        order.addAll(saved.distinct())
+        for (t in Tool.entries) if (t !in order) order.add(t)
+        arrange()
+    }
+
+    private fun arrange() {
+        for (t in order) {
+            val v = buttons[t] ?: continue
+            panel.removeView(v)
+            panel.addView(v)
+        }
     }
 
     /** Marca la herramienta que está activa (el láser), o ninguna. */

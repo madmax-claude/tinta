@@ -85,16 +85,6 @@ fun Activity.confirm(message: CharSequence, action: CharSequence, onOk: () -> Un
         .show()
 }
 
-/** Comparte el PDF (por ejemplo con LocalSend para pasarlo a la PC). */
-fun Activity.sharePdf(file: File) {
-    val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
-    val send = Intent(Intent.ACTION_SEND)
-        .setType("application/pdf")
-        .putExtra(Intent.EXTRA_STREAM, uri)
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    startActivity(Intent.createChooser(send, file.name))
-}
-
 /** Círculo de color o de tamaño en la barra; con anillo si está elegido. */
 class DotView(context: Context, var color: Int, var radius: Float) : View(context) {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)

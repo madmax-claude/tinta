@@ -240,7 +240,7 @@ class CloudBackup private constructor(private val context: Context) {
                 val list = o.optJSONArray("carpetas")
                 for (i in 0 until (list?.length() ?: 0)) {
                     val c = list!!.getJSONObject(i)
-                    store.library.adopt(c.getString("id"), c.getString("nombre"))
+                    store.library.adopt(c.getString("id"), c.getString("nombre"), c.optString("padre").ifEmpty { null })
                 }
                 val notes = o.optJSONObject("notas")
                 for (id in restoredIds) notes?.optString(id)?.takeIf { it.isNotEmpty() }?.let { store.library.move(id, it) }

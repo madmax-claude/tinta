@@ -106,6 +106,12 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
         apply()
     }
 
+    /** El color elegido para las barras de herramientas. */
+    fun paint(color: Int) {
+        Chrome.paint(panel, color)
+        Chrome.paint(tab, color)
+    }
+
     fun setSide(left: Boolean) {
         this.left = left
         apply()

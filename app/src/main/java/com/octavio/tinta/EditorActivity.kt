@@ -36,6 +36,7 @@ import androidx.lifecycle.Lifecycle
 import com.octavio.tinta.canvas.Elements
 import com.octavio.tinta.canvas.NoteCanvasView
 import com.octavio.tinta.canvas.NoteCanvasView.Mode
+import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.model.Clipboard
 import com.octavio.tinta.model.Find
@@ -65,6 +66,7 @@ import com.octavio.tinta.storage.NoteStore
 import com.octavio.tinta.storage.Stickers
 import com.octavio.tinta.ui.AudioPlayerBar
 import com.octavio.tinta.ui.CaptureBar
+import com.octavio.tinta.ui.Chrome
 import com.octavio.tinta.ui.CropDialog
 import com.octavio.tinta.ui.FloatingToolbar
 import com.octavio.tinta.ui.PageStrip
@@ -207,13 +209,14 @@ class EditorActivity :
             setOnClickListener { toggleDark() }
         }
         findViewById<View>(R.id.fit).setOnClickListener { canvas.fitToContent() }
-        findViewById<View>(R.id.export).setOnClickListener { exportPdf() }
+        findViewById<View>(R.id.export).setOnClickListener { v -> Popups.exportFormats(this, v, ::export) }
         findViewById<View>(R.id.fullscreen).setOnClickListener { setFullscreen(true) }
         listOf(R.id.search, R.id.sheet, R.id.beside, R.id.dark, R.id.fit, R.id.fullscreen, R.id.export).forEach {
             findViewById<View>(it).apply { tip(contentDescription) }
         }
 
         setupOverlays()
+        applyColors()
         setFullscreen(prefs.fullscreen)
 
         Tabs.windows[slot]?.takeIf { it !== this && !it.isFinishing }?.finish() // una sola pantalla por ventana
@@ -456,6 +459,7 @@ class EditorActivity :
         titles[n.id] = n.title
         canvas.mediaDir = store.mediaDir(n.id)
         canvas.paperStyle = n.background
+        canvas.paperColor = n.paperColor
         canvas.pages = n.pages
         canvas.restoreViewport(n.viewport)
         canvas.strokes = n.strokes
@@ -519,7 +523,7 @@ class EditorActivity :
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) return
         // Con dos notas en paralelo, lo que se cambió en la otra (modo, lápices) vale acá también.
-        if (prefs.dark != isDark || prefs.helpMessages != helpShown) {
+        if (prefs.dark != isDark || prefs.look != lookShown) {
             handler.removeCallbacks(autosave)
             canvas.finishPending()
             save(withThumbnail = false)
@@ -722,7 +726,7 @@ class EditorActivity :
         pageStrip.setPages(canvas.pageCount, n.pages.height / n.pages.width)
         if (snapshot) {
             pageThumbs.update(
-                PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages),
+                PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages, n.paperColor),
             )
             pageStrip.refresh()
         }
@@ -809,6 +813,7 @@ class EditorActivity :
         dock = ToolDock(this)
         dock.callbacks = this
         box.addView(dock, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL))
+        dock.setOrder(prefs.dockOrder)
         dock.setState(prefs.dockRight, prefs.dockCollapsed)
         toolbar = FloatingToolbar(this, isDark)
         toolbar.callbacks = this
@@ -1061,6 +1066,36 @@ class EditorActivity :
         applyTool()
     }
 
+    // --- Colores de Configuración ---
+
+    /** Los colores elegidos para la barra de arriba, las barras de herramientas y la pestaña. */
+    private fun applyColors() {
+        prefs.topBarColor?.let { c ->
+            Chrome.paint(findViewById(R.id.topbar), c)
+            // Arriba, detrás de la barra del sistema, el mismo color (abajo queda el de siempre).
+            val root = findViewById<View>(R.id.root)
+            val rest = getColor(R.color.chrome)
+            root.background = object : android.graphics.drawable.ColorDrawable(rest) {
+                private val top = android.graphics.Paint().apply { color = c }
+                override fun draw(canvas: android.graphics.Canvas) {
+                    super.draw(canvas)
+                    canvas.drawRect(0f, 0f, bounds.width().toFloat(), root.paddingTop.toFloat(), top)
+                }
+            }
+            WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = !Chrome.isDark(c)
+        }
+        tabs.barColor = prefs.topBarColor
+        tabs.activeColor = prefs.tabColor
+        prefs.toolsColor?.let { c ->
+            Chrome.paint(toolbar, c)
+            dock.paint(c)
+            pageStrip.paint(c)
+            for (bar in listOf(selectionBar, captureBar, zoomBar, timer, searchPanel)) Chrome.paint(bar, c)
+            timer.textColor = Chrome.ink(c, getColor(R.color.ink))
+            searchPanel.dark = Chrome.isDark(c)
+        }
+    }
+
     // --- Captura ---
 
     override fun onCaptureClick(button: View) {
@@ -1161,6 +1196,7 @@ class EditorActivity :
         val background = n.background
         val pages = n.pages
         val pageCount = canvas.pageCount
+        val paperColor = n.paperColor
         // Al menos 3 px por dp, o lo de la pantalla si está más cerca, sin pasar de 4096 px de
         // lado ni de 12 Mpx.
         val wanted = maxOf(CAPTURE_PX_PER_DP, canvas.camera.scale)
@@ -1168,7 +1204,7 @@ class EditorActivity :
         hint(getString(R.string.capture_working))
         Thread({
             val result = runCatching {
-                val bitmap = Render.area(strokes, images, texts, widgets, background, pages, pageCount, area, scale)
+                val bitmap = Render.area(strokes, images, texts, widgets, background, pages, pageCount, area, scale, paperColor)
                 val out = ByteArrayOutputStream()
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
                 bitmap.recycle()
@@ -1283,6 +1319,10 @@ class EditorActivity :
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+
+    override fun onDockOrder(order: List<ToolDock.Tool>) {
+        prefs.dockOrder = order
     }
 
     override fun onDockChanged(right: Boolean, collapsed: Boolean) {
@@ -1535,8 +1575,16 @@ class EditorActivity :
     private fun pickSheet(anchor: View) {
         val n = note ?: return
         Popups.sheet(
-            this, anchor, n.pages, n.background, isDark,
+            this, anchor, n.pages, n.background, isDark, n.paperColor,
             onFormat = { size, landscape -> setFormat(size, landscape) },
+            onPaperColor = { c ->
+                n.paperColor = c
+                canvas.paperColor = c
+                prefs.newPaperColor = c
+                pageThumbs.clear()
+                changed(redraw = false)
+                updatePageStrip(snapshot = true)
+            },
             onBackground = { bg ->
                 n.background = bg
                 canvas.paperStyle = bg
@@ -1623,24 +1671,16 @@ class EditorActivity :
         }, "tinta-imagen").start()
     }
 
-    private fun exportPdf() {
+    /** Exportar la nota que se ve (en el formato elegido). La nota entera se guarda antes. */
+    private fun export(format: Exporter.Format) {
         val n = note ?: return
         canvas.finishPending()
-        val title = n.title
-        val background = n.background
-        val pages = n.pages
-        val strokes = n.strokes.toList()
-        val images = n.images.toList()
-        val texts = n.texts.toList()
-        val widgets = n.widgets.toList()
-        hint("Generando PDF…")
-        store.io.execute {
-            val result = runCatching { Render.pdf(this, title, strokes, images, texts, widgets, background, pages) }
-            runOnUiThread {
-                result.onSuccess { launching { sharePdf(it) } }
-                    .onFailure { toast("No se pudo exportar: ${it.message}", long = true) }
-            }
+        if (format == Exporter.Format.NOTE) {
+            handler.removeCallbacks(autosave)
+            save(withThumbnail = true)
         }
+        if (format != Exporter.Format.TEXT) hint(getString(R.string.exporting))
+        Exporter.start(this, store, Exporter.snapshot(n), format) { open -> launching(open) }
     }
 
     companion object {
@@ -1699,7 +1739,7 @@ class EditorActivity :
         /** Una nota nueva con la hoja y el fondo que se usaron la última vez. */
         fun createNote(store: NoteStore, prefs: Prefs, folder: String?): Note {
             val title = SimpleDateFormat("'Nota del' d 'de' MMMM, HH:mm", Locale.forLanguageTag("es-AR")).format(Date())
-            return store.create(title, prefs.newBackground, PageLayout(prefs.newPageSize, prefs.newLandscape), folder)
+            return store.create(title, prefs.newBackground, PageLayout(prefs.newPageSize, prefs.newLandscape), folder, prefs.newPaperColor)
         }
     }
 }

@@ -37,6 +37,22 @@ import kotlin.math.sqrt
 
 /** Ventanitas de opciones que se abren junto a la barra flotante y a la barra de arriba. */
 object Popups {
+    /** Colores de hoja para elegir (además del de siempre): claros, para que la tinta se lea. */
+    private val PAPER_COLORS = listOf(
+        0xFFFFFFFF.toInt(), // blanco
+        0xFFFFF6D5.toInt(), // amarillo
+        0xFFFFEFD9.toInt(), // durazno
+        0xFFF4EBDC.toInt(), // sepia
+        0xFFEDE3D3.toInt(), // papel madera claro
+        0xFFE8F4E6.toInt(), // verde
+        0xFFE6F5F2.toInt(), // agua
+        0xFFE5F0FA.toInt(), // celeste
+        0xFFFBE8EE.toInt(), // rosa
+        0xFFEFEAF8.toInt(), // lila
+        0xFFEDEDED.toInt(), // gris
+        0xFFDCDCDC.toInt(), // gris medio
+    )
+
 
     /**
      * Opciones de un lápiz: herramienta, grosor, color (de la paleta, guardado o cualquiera con el
@@ -358,7 +374,9 @@ object Popups {
         current: PageLayout,
         currentBackground: Background,
         dark: Boolean,
+        paperColor: Int?,
         onFormat: (PageSize, Boolean) -> Unit,
+        onPaperColor: (Int?) -> Unit,
         onBackground: (Background) -> Unit,
     ) {
         val c: Context = activity
@@ -418,6 +436,11 @@ object Popups {
             }
         }
         refresh()
+
+        // El color de la hoja: tonos claros para que la tinta se siga leyendo.
+        box.addView(label(c, "Color de la hoja", 15f), topMargin(c, 14f))
+        if (dark) box.addView(hint(c, "En modo oscuro la hoja se ve oscura; el color se ve en modo claro y en el PDF."), topMargin(c, 2f))
+        box.addView(colorChoices(activity, Paper.COLOR, PAPER_COLORS, paperColor, columns = 11, onPick = onPaperColor), topMargin(c, 6f))
 
         box.addView(label(c, "Fondo", 15f), topMargin(c, 14f))
         val grid = GridLayout(c).apply { columnCount = 4 }
@@ -568,6 +591,113 @@ object Popups {
         box.addView(action("Insertar una hoja antes de esta", R.drawable.ic_add) { onInsert(false) })
         box.addView(action("Borrar esta hoja…", R.drawable.ic_delete, 0xFFD93025.toInt(), onDelete))
         popup = show(activity, anchor, box, 340f)
+    }
+
+    /**
+     * Para elegir un color: el de siempre (`original`, tachado), los de `palette`, el elegido a mano
+     * si no está en la paleta, y un "+" que abre el selector libre. Cada toque llama a `onPick`
+     * (null: el de siempre).
+     */
+    fun colorChoices(activity: Activity, original: Int, palette: List<Int>, current: Int?, columns: Int, onPick: (Int?) -> Unit): View {
+        val c: Context = activity
+        val grid = GridLayout(c).apply { columnCount = columns }
+        val all = ArrayList<Pair<Int?, Swatch>>()
+        var chosen = current
+        lateinit var custom: Swatch
+        fun select(value: Int?) {
+            chosen = value
+            val inPalette = value == null || value in palette
+            custom.visibility = if (inPalette) View.GONE else View.VISIBLE
+            if (!inPalette && value != null) custom.color = value
+            for ((v, w) in all) {
+                w.isSelected = when {
+                    w === custom -> !inPalette
+                    w.tag == PLUS -> false
+                    else -> v == value
+                }
+                w.invalidate()
+            }
+        }
+        fun add(value: Int?, sw: Swatch) {
+            all.add(value to sw)
+            grid.addView(sw, GridLayout.LayoutParams().apply {
+                width = c.dp(40f).toInt()
+                height = c.dp(40f).toInt()
+            })
+        }
+        for (value in listOf<Int?>(null) + palette) {
+            add(value, Swatch(c, value ?: original, original = value == null).apply {
+                contentDescription = if (value == null) "El de siempre" else "Color"
+                setOnClickListener {
+                    select(value)
+                    onPick(value)
+                }
+            })
+        }
+        custom = Swatch(c, current ?: original, original = false).apply {
+            contentDescription = "El color elegido"
+            setOnClickListener { chosen?.let(onPick) }
+        }
+        add(null, custom)
+        add(null, Swatch(c, original, original = false, plus = true).apply {
+            tag = PLUS
+            contentDescription = "Otro color"
+            tip(contentDescription)
+            setOnClickListener {
+                pickColor(activity, chosen ?: original) { picked ->
+                    select(picked)
+                    onPick(picked)
+                }
+            }
+        })
+        select(current)
+        return grid
+    }
+
+    private const val PLUS = "otro-color"
+
+    /** El selector libre de color en una ventanita, con una muestra; "Aceptar" lo elige. */
+    fun pickColor(activity: Activity, initial: Int, onPick: (Int) -> Unit) {
+        val c: Context = activity
+        val box = column(c)
+        val preview = View(c).apply { setBackgroundColor(initial) }
+        val picker = ColorPickerView(c).apply { setColor(initial) }
+        box.addView(picker)
+        box.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, c.dp(28f).toInt()).apply { topMargin = c.dp(10f).toInt() })
+        var color = initial
+        picker.onChange = { picked, _ ->
+            color = picked
+            preview.setBackgroundColor(picked)
+        }
+        android.app.AlertDialog.Builder(activity)
+            .setTitle("Otro color")
+            .setView(box)
+            .setPositiveButton(R.string.ok) { _, _ -> onPick(color) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Exportar: en qué formato, con para qué sirve cada uno. */
+    fun exportFormats(activity: Activity, anchor: View, onPick: (com.octavio.tinta.export.Exporter.Format) -> Unit) {
+        val c: Context = activity
+        val box = column(c)
+        lateinit var popup: PopupWindow
+        box.addView(label(c, "Exportar como", 15f))
+        for (f in com.octavio.tinta.export.Exporter.Format.entries) {
+            box.addView(LinearLayout(c).apply {
+                orientation = LinearLayout.VERTICAL
+                background = c.getDrawable(R.drawable.bg_tool)
+                val p = c.dp(10f).toInt()
+                setPadding(p, p, p, p)
+                addView(label(c, f.label, 15f).apply { setTextColor(c.getColor(R.color.accent)) })
+                addView(hint(c, f.detail))
+                setOnClickListener {
+                    popup.dismiss()
+                    onPick(f)
+                }
+            }, topMargin(c, 6f))
+        }
+        popup = show(activity, anchor, box, 380f)
     }
 
     /** Colores para pintar lo elegido: los de la paleta y los guardados. */

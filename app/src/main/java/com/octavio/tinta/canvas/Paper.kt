@@ -19,7 +19,10 @@ import kotlin.math.sqrt
  * hilo tiene su instancia. En pantalla, con mucho alejamiento se saltean líneas y textos que no se
  * verían; `vector` (el PDF, que se mira con zoom) los dibuja siempre.
  */
-class Paper(vector: Boolean = false) {
+class Paper(vector: Boolean = false, color: Int? = null) {
+    /** Color de la hoja (en modo claro): el de la nota, o el de siempre. */
+    var color: Int = color ?: COLOR
+
     /** Cuánto de los mínimos en píxeles se exige: en el PDF, casi nada. */
     private val detail = if (vector) 0.2f else 1f
 
@@ -52,7 +55,7 @@ class Paper(vector: Boolean = false) {
         // `strong`: líneas más marcadas, para las muestras chicas del selector de fondo.
         contrast = if (strong) 2 else 1
         if (!pages.paged) {
-            canvas.drawColor(if (dark) DARK else COLOR)
+            canvas.drawColor(if (dark) DARK else color)
             pattern(canvas, background, scale, tx, ty, width, height, dark, frameFor(background, pages))
             return
         }
@@ -70,7 +73,7 @@ class Paper(vector: Boolean = false) {
             val b = t + pages.height * scale
             fill.color = if (dark) 0x66000000 else 0x22000000
             canvas.drawRect(l + shadow * 0.5f, t + shadow, r + shadow * 0.5f, b + shadow, fill)
-            fill.color = if (dark) DARK else COLOR
+            fill.color = if (dark) DARK else color
             canvas.drawRect(l, t, r, b, fill)
             val save = canvas.save()
             canvas.clipRect(max(l, 0f), max(t, 0f), min(r, width), min(b, height))

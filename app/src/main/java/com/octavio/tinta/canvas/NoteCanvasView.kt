@@ -173,6 +173,15 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             elementsChanged()
         }
 
+    /** Color de la hoja de la nota (null: el de siempre). */
+    var paperColor: Int? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            dry.setPaperColor(value)
+            elementsChanged()
+        }
+
     /** Hojas de la nota; sin tamaño, la nota es infinita. */
     var pages = PageLayout()
         set(value) {
@@ -2257,6 +2266,20 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         private var version = 0
         private val overview = Overview { post { invalidate() } }
         private var overviewAskedAt = 0L
+        private var usableVersion = -1
+        private var usableStamp: Any? = null
+        private var usable = false
+
+        /** [Overview.shows], revisado una vez por versión de la nota y por imagen. */
+        private fun overviewUsable(): Boolean {
+            val stamp = overview.stamp
+            if (usableVersion != version || usableStamp !== stamp) {
+                usable = overview.shows(strokes)
+                usableVersion = version
+                usableStamp = stamp
+            }
+            return usable
+        }
 
         /**
          * Con la vista quieta, arma de antemano la imagen de toda la nota si es grande y la que
@@ -2270,6 +2293,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             overview.request(strokes.toList(), version, dark)
         }
         private val paper = Paper()
+
+        fun setPaperColor(c: Int?) {
+            paper.color = c ?: Paper.COLOR
+            zoomDirty = true
+        }
         val painter = WidgetPainter()
         val textPaint = Elements.newTextPaint()
         private val worldToScreen = Matrix()
@@ -2397,6 +2425,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat()
             val h = height.toFloat()
+            // Al volver de otra app Android ya borró lo grabado en los nodos: se vuelve a grabar.
+            if (chunks.recoverLost()) zoomDirty = true
+            if (!zoomNode.hasDisplayList()) zoomDirty = true
             if (contentStale) updatePageCount()
             // Debajo de las baldosas, por si falta alguna.
             paper.draw(canvas, paperStyle, camera.scale, camera.tx, camera.ty, w, h, dark, pages = pages, pageCount = pageCount)
@@ -2433,7 +2464,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (tiles.needsBackdrop(view)) {
                 val crowded = chunks.count(view.left, view.top, view.right, view.bottom) > CROWDED
                 if (crowded && !overview.hasImage && !overview.isCurrent(version)) overview.request(strokes.toList(), version, dark)
-                if (overview.hasImage && camera.scale <= overview.scale * MAX_UPSCALE) overview.draw(canvas)
+                if (overview.hasImage && camera.scale <= overview.scale * MAX_UPSCALE && overviewUsable()) overview.draw(canvas)
             }
             canvas.restoreToCount(save)
 
