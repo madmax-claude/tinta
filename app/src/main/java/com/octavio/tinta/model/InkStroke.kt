@@ -45,6 +45,12 @@ class InkStroke private constructor(
         encoded, built, sensitivity,
     )
 
+    /**
+     * Las rayas de una misma línea a rayas o de puntos comparten este número (0: suelto). El
+     * borrador de trazo entero las borra todas juntas.
+     */
+    var group: Long = 0L
+
     @Volatile private var cached = encoded
     @Volatile private var mesh = built
     @Volatile private var darkMesh: Stroke? = null
@@ -82,6 +88,7 @@ class InkStroke private constructor(
     fun transformed(t: Transform): InkStroke {
         val b = t.box(left, top, right, bottom)
         return InkStroke(tool, color, size * t.a, epsilon, b[0], b[1], b[2], b[3], StrokeCodec.transform(encoded(), t), null, sensitivity)
+            .also { it.group = group }
     }
 
     /**
@@ -96,15 +103,15 @@ class InkStroke private constructor(
         }.getOrNull()
         if (built == null) {
             val b = t.box(left, top, right, bottom)
-            return InkStroke(tool, color, size * t.a, epsilon, b[0], b[1], b[2], b[3], bytes, null, sensitivity)
+            return InkStroke(tool, color, size * t.a, epsilon, b[0], b[1], b[2], b[3], bytes, null, sensitivity).also { it.group = group }
         }
-        return InkStroke(tool, color, size * t.a, epsilon, built.shape.computeBoundingBox(), bytes, built, sensitivity)
+        return InkStroke(tool, color, size * t.a, epsilon, built.shape.computeBoundingBox(), bytes, built, sensitivity).also { it.group = group }
     }
 
     /** El mismo trazo con otro color (ya como se guarda); si tiene malla, la reutiliza. */
     fun recolored(newColor: Int): InkStroke {
-        val s = mesh ?: return InkStroke(tool, newColor, size, epsilon, left, top, right, bottom, encoded(), null, sensitivity)
-        return InkStroke(tool, s.copy(s.brush.copyWithColorIntArgb(newColor)), sensitivity)
+        val s = mesh ?: return InkStroke(tool, newColor, size, epsilon, left, top, right, bottom, encoded(), null, sensitivity).also { it.group = group }
+        return InkStroke(tool, s.copy(s.brush.copyWithColorIntArgb(newColor)), sensitivity).also { it.group = group }
     }
 
     /** Las coordenadas de sus puntos, en pares (x, y). */
@@ -114,6 +121,13 @@ class InkStroke private constructor(
     fun encoded(): ByteArray = cached ?: StrokeCodec.encode(checkNotNull(mesh).inputs).also { cached = it }
 
     companion object {
+        /** Un número de línea nuevo para [group] (distinto de 0). */
+        fun newGroup(): Long {
+            var g = 0L
+            while (g == 0L) g = java.util.concurrent.ThreadLocalRandom.current().nextLong()
+            return g
+        }
+
         /** Trazo leído de un archivo o importado: sin malla todavía. */
         fun unbuilt(
             tool: Tool,

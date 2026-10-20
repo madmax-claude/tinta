@@ -48,7 +48,7 @@ import java.util.zip.InflaterInputStream
  */
 object NoteFormat {
     const val MAGIC = "TINTA"
-    const val VERSION = 8
+    const val VERSION = 9
 
     data class Header(
         val title: String,
@@ -241,6 +241,32 @@ object NoteFormat {
     }
 
     /** Los trazos van después de la cabecera, en un único bloque deflate. */
+    /**
+     * Desde la versión 9, al final: qué trazos son rayas de una misma línea. Sólo los que tienen
+     * número (índice en la lista de trazos y número).
+     */
+    fun writeGroups(out: DataOutputStream, groups: List<Long>) {
+        val marked = groups.withIndex().filter { it.value != 0L }
+        out.writeInt(marked.size)
+        for ((i, g) in marked) {
+            out.writeInt(i)
+            out.writeLong(g)
+        }
+    }
+
+    /** Lo de [writeGroups]: número de cada trazo que tiene uno (índices fuera de rango, ignorados). */
+    fun readGroups(input: DataInputStream, strokeCount: Int): Map<Int, Long> {
+        val n = input.readInt()
+        if (n < 0 || n > strokeCount) throw IOException("líneas dañadas ($n)")
+        val out = HashMap<Int, Long>(n * 2)
+        repeat(n) {
+            val i = input.readInt()
+            val g = input.readLong()
+            if (i in 0 until strokeCount) out[i] = g
+        }
+        return out
+    }
+
     fun strokeInput(input: InputStream) = DataInputStream(BufferedInputStream(InflaterInputStream(input), 1 shl 16))
 
     private const val MAX_STROKE_BYTES = 64 shl 20

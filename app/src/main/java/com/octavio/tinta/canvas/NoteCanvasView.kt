@@ -1165,7 +1165,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             inputs.populate(k, p)
             points.add(Cut.Point(p.x, p.y, p.elapsedTimeMillis.toFloat(), p.pressure, p.tiltRadians, p.orientationRadians))
         }
-        return rebuild(s, stroke, Dash.split(points, lengths)).ifEmpty { listOf(s) }
+        val pieces = rebuild(s, stroke, Dash.split(points, lengths))
+        if (pieces.isEmpty()) return listOf(s)
+        val g = InkStroke.newGroup()
+        for (piece in pieces) piece.group = g
+        return pieces
     }
 
     /** Arma un trazo por cada parte (puntos de [Cut]) con el pincel del original. */
@@ -1178,7 +1182,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 val batch = MutableStrokeInputBatch()
                 val t0 = part[0].t
                 for (q in part) batch.add(type, q.x, q.y, (q.t - t0).toLong().coerceAtLeast(0L), unit, q.pressure, q.tilt, q.orientation)
-                InkStroke(s.tool, Stroke(stroke.brush, batch), s.sensitivity)
+                InkStroke(s.tool, Stroke(stroke.brush, batch), s.sensitivity).also { it.group = s.group }
             }.getOrNull()
         }
     }
@@ -1213,6 +1217,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val top = min(y, eraseY) - r
         val bottom = max(y, eraseY) + r
         var changed = false
+        var groups: HashSet<Long>? = null
         for (i in strokes.indices.reversed()) {
             val s = strokes[i]
             if (!s.intersects(left, top, right, bottom)) continue
@@ -1232,8 +1237,19 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 } else {
                     strokes.removeAt(i)
                     erased.add(i to s)
+                    if (s.group != 0L) (groups ?: HashSet<Long>().also { groups = it }).add(s.group)
                 }
                 changed = true
+            }
+        }
+        // Una raya de una línea a rayas o de puntos: se va la línea entera.
+        groups?.let { g ->
+            for (j in strokes.indices.reversed()) {
+                val s = strokes[j]
+                if (s.group != 0L && s.group in g) {
+                    strokes.removeAt(j)
+                    erased.add(j to s)
+                }
             }
         }
         eraseX = x
@@ -1530,7 +1546,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         finishPending()
         val sel = selection ?: return
         val off = DUPLICATE_OFFSET * density / camera.scale
-        addTransformed(sel.strokes, sel.images, sel.texts, sel.widgets, Transform.translation(off, off), emptyList())
+        addTransformed(sel.strokes, sel.images, sel.texts, sel.widgets, Transform.translation(off, off), emptyList(), copies = true)
     }
 
     /** Pega lo copiado (o un sticker) centrado en (x, y) del mundo, o en el centro de la pantalla, y lo deja elegido. */
@@ -1539,7 +1555,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val c = visibleCenter()
         addTransformed(
             clip.strokes, clip.images, clip.texts, clip.widgets,
-            Transform.translation((x ?: c.x) - clip.bounds.centerX(), (y ?: c.y) - clip.bounds.centerY()), emptyList(),
+            Transform.translation((x ?: c.x) - clip.bounds.centerX(), (y ?: c.y) - clip.bounds.centerY()), emptyList(), copies = true,
         )
     }
 
@@ -1791,10 +1807,16 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         sourceWidgets: List<Widget>,
         t: Transform,
         before: List<History.Edit>,
+        copies: Boolean = false,
     ) {
         val dir = mediaDir
         val task = FutureTask(Callable {
             val moved = Work.map(source) { it.transformedBuilt(t) }
+            // Una copia no es la misma línea: borrar la copia no tiene que borrar el original.
+            if (copies) {
+                val renamed = HashMap<Long, Long>()
+                for (s in moved) if (s.group != 0L) s.group = renamed.getOrPut(s.group) { InkStroke.newGroup() }
+            }
             InkDraw.warmNow(moved)
             val movedImages = sourceImages.map { i -> i.transformed(t).let { if (dir != null) it.withFile(NoteStore.copyMedia(it.file, dir)) else it } }
             val movedWidgets = sourceWidgets.map { w -> w.transformed(t).let { if (dir != null) it.withFiles { f -> NoteStore.copyMedia(f, dir) } else it } }

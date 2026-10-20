@@ -101,4 +101,12 @@ class NoteFormatTest {
         assertEquals(null, back.paperColor)
         assertEquals(header, back)
     }
+
+    @Test
+    fun lineGroupsRoundTrip() {
+        val groups = listOf(0L, 42L, 42L, 0L, -7L)
+        val bytes = ByteArrayOutputStream().also { buf -> DataOutputStream(buf).use { NoteFormat.writeGroups(it, groups) } }.toByteArray()
+        val back = DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readGroups(it, groups.size) }
+        assertEquals(mapOf(1 to 42L, 2 to 42L, 4 to -7L), back)
+    }
 }

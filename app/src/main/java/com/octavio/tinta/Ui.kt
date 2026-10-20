@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.text.InputType
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -48,15 +49,36 @@ fun Context.hint(text: CharSequence, long: Boolean = false) {
  */
 fun View.padForSystemBars(fullscreen: () -> Boolean = { false }) {
     ViewCompat.setOnApplyWindowInsetsListener(this) { v, insets ->
-        if (fullscreen()) {
+        val b = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+        val full = fullscreen()
+        if (full) {
             v.setPadding(0, 0, 0, 0)
+            clearAncestorPadding(v)
         } else {
-            val b = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             v.setPadding(b.left, b.top, b.right, b.bottom)
         }
+        Diag.log("insets: pantalla completa=$full barras=$b visibles=${insets.isVisible(WindowInsetsCompat.Type.statusBars())} y del contenido=${v.locationOnScreenY()}")
         WindowInsetsCompat.CONSUMED
     }
 }
+
+/**
+ * Los marcos que pone Android alrededor de la app (entre la ventana y `v`) tampoco dejan lugar:
+ * en la tablet Lenovo uno de ellos seguía corriendo todo hacia abajo en pantalla completa.
+ */
+fun clearAncestorPadding(v: View) {
+    var p = v.parent
+    while (p is ViewGroup && p !== v.rootView) {
+        if (p.paddingTop != 0 || p.paddingLeft != 0 || p.paddingRight != 0 || p.paddingBottom != 0) {
+            Diag.log("insets: marco ${p.javaClass.simpleName} tenía ${p.paddingLeft},${p.paddingTop},${p.paddingRight},${p.paddingBottom}")
+            p.setPadding(0, 0, 0, 0)
+        }
+        p.fitsSystemWindows = false
+        p = p.parent
+    }
+}
+
+private fun View.locationOnScreenY(): Int = IntArray(2).also { getLocationOnScreen(it) }[1]
 
 fun Activity.askText(title: CharSequence, initial: String, onOk: (String) -> Unit) {
     val input = EditText(this).apply {

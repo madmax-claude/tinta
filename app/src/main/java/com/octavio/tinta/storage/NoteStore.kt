@@ -160,6 +160,9 @@ class NoteStore private constructor(context: Context) {
                 if (h.version >= 2) {
                     NoteFormat.readElements(data, h.version, media, note.images, note.texts, note.widgets) { keep(media, it) }
                 }
+                if (h.version >= 9) {
+                    for ((i, g) in NoteFormat.readGroups(data, note.strokes.size)) note.strokes[i].group = g
+                }
             }
             Log.i(TAG, "«${h.title}»: ${note.strokes.size} trazos leídos en ${(System.nanoTime() - t0) / 1_000_000} ms")
             note
@@ -193,6 +196,7 @@ class NoteStore private constructor(context: Context) {
                     )
                 }
                 NoteFormat.writeElements(out, images, texts, widgets)
+                NoteFormat.writeGroups(out, strokes.map { it.group })
                 out.flush()
                 compressed.finish()
                 bos.flush()

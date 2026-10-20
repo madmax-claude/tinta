@@ -1319,8 +1319,22 @@ class EditorActivity :
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
-        // Que el lugar de las barras del sistema se saque (o vuelva) ya, sin esperar al sistema.
-        androidx.core.view.ViewCompat.requestApplyInsets(findViewById(R.id.root))
+        // Que el lugar de las barras del sistema se saque (o vuelva) ya, sin esperar al sistema; y
+        // otra vez un rato después, cuando la tablet terminó de esconder las barras.
+        val root = findViewById<View>(R.id.root)
+        if (on) {
+            root.setPadding(0, 0, 0, 0)
+            clearAncestorPadding(root)
+        }
+        androidx.core.view.ViewCompat.requestApplyInsets(root)
+        root.postDelayed({
+            if (prefs.fullscreen == on) {
+                if (on) clearAncestorPadding(root)
+                androidx.core.view.ViewCompat.requestApplyInsets(root)
+                val loc = IntArray(2).also { root.getLocationOnScreen(it) }
+                Diag.log("pantalla completa=$on: raíz en y=${loc[1]}, relleno arriba=${root.paddingTop}")
+            }
+        }, FULLSCREEN_SETTLE_MS)
     }
 
     override fun onDockOrder(order: List<ToolDock.Tool>) {
@@ -1688,6 +1702,9 @@ class EditorActivity :
     companion object {
         const val EXTRA_ID = "id"
         const val EXTRA_SLOT = "slot"
+
+        /** Cuánto esperar a que la tablet termine de esconder o mostrar las barras del sistema. */
+        private const val FULLSCREEN_SETTLE_MS = 600L
 
         private const val CAPTURE_PX_PER_DP = 3f
         private const val CAPTURE_MAX_SIDE = 4096f
