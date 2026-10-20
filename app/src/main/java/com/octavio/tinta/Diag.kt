@@ -19,17 +19,22 @@ object Diag {
         if (file == null) file = File(context.filesDir, "diag.txt")
     }
 
-    @Synchronized
+    /** En su propio hilo: escribir el archivo no traba la pantalla. */
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "tinta-diag").apply { isDaemon = true } }
+
     fun log(message: String) {
         val f = file ?: return
-        runCatching {
-            if (f.length() > MAX_BYTES) {
-                val tail = f.readText().takeLast(MAX_BYTES.toInt() / 2)
-                f.writeText(tail)
-            }
-            f.appendText("${time.format(Date())} $message\n")
-        }
+        val line = "${synchronized(time) { time.format(Date()) }} $message\n"
         android.util.Log.d("Tinta", message)
+        writer.execute {
+            runCatching {
+                if (f.length() > MAX_BYTES) {
+                    val tail = f.readText().takeLast(MAX_BYTES.toInt() / 2)
+                    f.writeText(tail)
+                }
+                f.appendText(line)
+            }
+        }
     }
 
     private const val MAX_BYTES = 64 * 1024L

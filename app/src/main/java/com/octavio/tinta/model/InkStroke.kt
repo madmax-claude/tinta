@@ -22,12 +22,14 @@ class InkStroke private constructor(
     encoded: ByteArray?,
     built: Stroke?,
     /** Sensibilidad a la presión con que se hizo (sólo cuenta en la pluma; ver [Sensitivity]). */
-    val sensitivity: Int = Sensitivity.DEFAULT,
+    val sensitivity: Int,
+    /** El número de línea inicial (ver [group]). Obligatorio: así ninguna copia lo pierde. */
+    group: Long,
 ) {
     /** Recién dibujado: ya tiene malla. */
-    constructor(tool: Tool, stroke: Stroke, sensitivity: Int = Sensitivity.DEFAULT) : this(
+    constructor(tool: Tool, stroke: Stroke, sensitivity: Int = Sensitivity.DEFAULT, group: Long = 0L) : this(
         tool, stroke.brush.colorIntArgb, stroke.brush.size, stroke.brush.epsilon,
-        stroke.shape.computeBoundingBox(), null, stroke, sensitivity,
+        stroke.shape.computeBoundingBox(), null, stroke, sensitivity, group,
     )
 
     private constructor(
@@ -39,17 +41,19 @@ class InkStroke private constructor(
         encoded: ByteArray?,
         built: Stroke?,
         sensitivity: Int,
+        group: Long,
     ) : this(
         tool, color, size, epsilon,
         box?.xMin ?: Float.NaN, box?.yMin ?: Float.NaN, box?.xMax ?: Float.NaN, box?.yMax ?: Float.NaN,
-        encoded, built, sensitivity,
+        encoded, built, sensitivity, group,
     )
 
     /**
      * Las rayas de una misma línea a rayas o de puntos comparten este número (0: suelto). El
-     * borrador de trazo entero las borra todas juntas.
+     * borrador de trazo entero las borra todas juntas. Se cambia (en el hilo de la pantalla, o
+     * antes de que la nota llegue a la pantalla) cuando una línea queda partida en dos.
      */
-    var group: Long = 0L
+    @Volatile var group: Long = group
 
     @Volatile private var cached = encoded
     @Volatile private var mesh = built
@@ -87,8 +91,7 @@ class InkStroke private constructor(
      */
     fun transformed(t: Transform): InkStroke {
         val b = t.box(left, top, right, bottom)
-        return InkStroke(tool, color, size * t.a, epsilon, b[0], b[1], b[2], b[3], StrokeCodec.transform(encoded(), t), null, sensitivity)
-            .also { it.group = group }
+        return InkStroke(tool, color, size * t.a, epsilon, b[0], b[1], b[2], b[3], StrokeCodec.transform(encoded(), t), null, sensitivity, group)
     }
 
     /**
@@ -103,15 +106,15 @@ class InkStroke private constructor(
         }.getOrNull()
         if (built == null) {
             val b = t.box(left, top, right, bottom)
-            return InkStroke(tool, color, size * t.a, epsilon, b[0], b[1], b[2], b[3], bytes, null, sensitivity).also { it.group = group }
+            return InkStroke(tool, color, size * t.a, epsilon, b[0], b[1], b[2], b[3], bytes, null, sensitivity, group)
         }
-        return InkStroke(tool, color, size * t.a, epsilon, built.shape.computeBoundingBox(), bytes, built, sensitivity).also { it.group = group }
+        return InkStroke(tool, color, size * t.a, epsilon, built.shape.computeBoundingBox(), bytes, built, sensitivity, group)
     }
 
     /** El mismo trazo con otro color (ya como se guarda); si tiene malla, la reutiliza. */
     fun recolored(newColor: Int): InkStroke {
-        val s = mesh ?: return InkStroke(tool, newColor, size, epsilon, left, top, right, bottom, encoded(), null, sensitivity).also { it.group = group }
-        return InkStroke(tool, s.copy(s.brush.copyWithColorIntArgb(newColor)), sensitivity).also { it.group = group }
+        val s = mesh ?: return InkStroke(tool, newColor, size, epsilon, left, top, right, bottom, encoded(), null, sensitivity, group)
+        return InkStroke(tool, s.copy(s.brush.copyWithColorIntArgb(newColor)), sensitivity, group)
     }
 
     /** Las coordenadas de sus puntos, en pares (x, y). */
@@ -140,6 +143,7 @@ class InkStroke private constructor(
             bottom: Float,
             encoded: ByteArray,
             sensitivity: Int = Sensitivity.DEFAULT,
-        ) = InkStroke(tool, color, size, epsilon, left, top, right, bottom, encoded, null, sensitivity)
+            group: Long = 0L,
+        ) = InkStroke(tool, color, size, epsilon, left, top, right, bottom, encoded, null, sensitivity, group)
     }
 }

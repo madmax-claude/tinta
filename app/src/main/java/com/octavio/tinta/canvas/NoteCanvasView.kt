@@ -1182,7 +1182,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 val batch = MutableStrokeInputBatch()
                 val t0 = part[0].t
                 for (q in part) batch.add(type, q.x, q.y, (q.t - t0).toLong().coerceAtLeast(0L), unit, q.pressure, q.tilt, q.orientation)
-                InkStroke(s.tool, Stroke(stroke.brush, batch), s.sensitivity).also { it.group = s.group }
+                InkStroke(s.tool, Stroke(stroke.brush, batch), s.sensitivity, s.group)
             }.getOrNull()
         }
     }
@@ -1192,7 +1192,68 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** Lo que hizo el borrador parcial en esta pasada, en orden, para deshacerlo de una vez. */
     private val cutEdits = ArrayList<History.Edit>()
 
+    /** Las líneas a rayas que el borrador parcial cortó en esta pasada. */
+    private val cutGroups = HashSet<Long>()
+
+    // --- Líneas a rayas que quedan partidas ---
+
+    /**
+     * Cambia el número de línea de algunos trazos (un paso de deshacer): `changes` son los trazos
+     * y su número nuevo. Null si no hay nada que cambiar.
+     */
+    private fun regroup(changes: List<Pair<InkStroke, Long>>): History.Edit? {
+        if (changes.isEmpty()) return null
+        val old = changes.map { it.first to it.first.group }
+        for ((st, g) in changes) st.group = g
+        return History.Change({ for ((st, g) in old) st.group = g }, { for ((st, g) in changes) st.group = g })
+    }
+
+    /**
+     * Las líneas `groups` que quedaron con un hueco más grande que el de su patrón (cortadas por el
+     * borrador, o separadas al insertar una hoja) se parten: cada tramo seguido es una línea. Las
+     * rayas están en la lista en el orden en que se dibujaron.
+     */
+    private fun splitBrokenLines(groups: Set<Long>): History.Edit? {
+        val changes = ArrayList<Pair<InkStroke, Long>>()
+        for (g in groups) {
+            val members = strokes.filter { it.group == g }
+            if (members.size < 2) continue
+            var current = g
+            var last = members[0].points()
+            for (k in 1 until members.size) {
+                val st = members[k]
+                val pts = st.points()
+                if (last.size >= 2 && pts.size >= 2) {
+                    val gap = hypot(pts[0] - last[last.size - 2], pts[1] - last[last.size - 1])
+                    if (gap > maxDashGap(st.size)) current = InkStroke.newGroup()
+                }
+                if (current != g) changes.add(st to current)
+                last = pts
+            }
+        }
+        return regroup(changes)
+    }
+
+    /** El hueco más grande que puede haber entre dos rayas seguidas de una línea de grosor `size`. */
+    private fun maxDashGap(size: Float) = Dash.entries.maxOf { d -> d.lengths(size)?.filterIndexed { i, _ -> i % 2 == 1 }?.maxOrNull() ?: 0f } * 1.6f + 1f
+
+    /**
+     * Al mover una parte de una línea a rayas (el lazo agarró algunas rayas), la parte movida pasa
+     * a ser otra línea: borrarla no tiene que borrar lo que quedó en su lugar.
+     */
+    private fun separateMoved(moved: List<InkStroke>): History.Edit? {
+        val groups = moved.mapNotNullTo(HashSet()) { it.group.takeIf { g -> g != 0L } }
+        if (groups.isEmpty()) return null
+        val movedSet = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<InkStroke, Boolean>()).apply { addAll(moved) }
+        val stayed = strokes.filter { it.group in groups && it !in movedSet }.mapTo(HashSet()) { it.group }
+        if (stayed.isEmpty()) return null
+        val renamed = HashMap<Long, Long>()
+        return regroup(moved.filter { it.group in stayed }.map { it to renamed.getOrPut(it.group) { InkStroke.newGroup() } })
+    }
+
     private fun startErase(sx: Float, sy: Float) {
+        // Lo elegido con el lazo podría borrarse (una raya de su misma línea, por ejemplo): se suelta.
+        if (selection != null) clearSelection()
         mergeFresh() // el borrador trabaja sobre la lista entera, ya en las tandas
         erasing = true
         erased.clear()
@@ -1228,6 +1289,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 if (partialErase) {
                     // Se cambia el trazo por los pedazos que quedan afuera de la goma.
                     val pieces = cut(s, eraseX, eraseY, x, y, r) ?: continue
+                    if (s.group != 0L) cutGroups.add(s.group)
                     strokes.removeAt(i)
                     cutEdits.add(History.Remove(strokes, listOf(i to s)))
                     if (pieces.isNotEmpty()) {
@@ -1281,6 +1343,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         erasing = false
         if (erased.isNotEmpty()) listener?.onStrokesErased(ArrayList(erased))
         erased.clear()
+        // Una línea a rayas cortada por la mitad queda en dos líneas.
+        if (cutGroups.isNotEmpty()) splitBrokenLines(cutGroups)?.let(cutEdits::add)
+        cutGroups.clear()
         if (cutEdits.isNotEmpty()) listener?.onEdited(History.Group(ArrayList(cutEdits)))
         cutEdits.clear()
         setCursor(hover?.takeIf { wantsEraserNow() }) // si el lápiz sigue cerca, sigue el cursor
@@ -1833,6 +1898,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (a.images.isNotEmpty()) edits.add(History.Add(images, a.images))
             if (a.texts.isNotEmpty()) edits.add(History.Add(texts, a.texts))
             if (a.widgets.isNotEmpty()) edits.add(History.Add(widgets, a.widgets))
+            if (!copies) separateMoved(a.strokes)?.let(edits::add)
             endLift()
             listener?.onEdited(History.Group(edits))
             selection = Selection(a.strokes, a.images, a.texts, a.widgets)
@@ -1980,6 +2046,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (a.images.isNotEmpty()) edits.add(History.Add(images, a.images))
             if (a.texts.isNotEmpty()) edits.add(History.Add(texts, a.texts))
             if (a.widgets.isNotEmpty()) edits.add(History.Add(widgets, a.widgets))
+            // Una línea a rayas que cruzaba el lugar de la hoja nueva queda en dos.
+            a.strokes.mapNotNullTo(HashSet()) { it.group.takeIf { g -> g != 0L } }.takeIf { it.isNotEmpty() }?.let { g ->
+                splitBrokenLines(g)?.let(edits::add)
+            }
             edits.add(History.Change({ setPages(old, null) }, { setPages(new, null) }))
             setPages(new, null)
             listener?.onEdited(History.Group(edits))

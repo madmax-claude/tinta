@@ -50,6 +50,12 @@ object NoteFormat {
     const val MAGIC = "TINTA"
     const val VERSION = 9
 
+    /**
+     * La versión con que se guarda una nota: la 9 sólo si tiene líneas a rayas o de puntos (el
+     * bloque de líneas); si no, la 8, que también abren las versiones anteriores de la app.
+     */
+    fun versionFor(hasGroups: Boolean) = if (hasGroups) VERSION else 8
+
     data class Header(
         val title: String,
         val background: Background,
@@ -78,7 +84,7 @@ object NoteFormat {
 
     fun writeHeader(out: DataOutputStream, h: Header) {
         out.writeUTF(MAGIC)
-        out.writeInt(VERSION)
+        out.writeInt(h.version)
         out.writeUTF(h.title)
         out.writeInt(h.background.id)
         out.writeLong(h.created)
@@ -240,7 +246,6 @@ object NoteFormat {
         return ByteArray(n).also { input.readFully(it) }
     }
 
-    /** Los trazos van después de la cabecera, en un único bloque deflate. */
     /**
      * Desde la versión 9, al final: qué trazos son rayas de una misma línea. Sólo los que tienen
      * número (índice en la lista de trazos y número).
@@ -267,6 +272,7 @@ object NoteFormat {
         return out
     }
 
+    /** Los trazos van después de la cabecera, en un único bloque deflate. */
     fun strokeInput(input: InputStream) = DataInputStream(BufferedInputStream(InflaterInputStream(input), 1 shl 16))
 
     private const val MAX_STROKE_BYTES = 64 shl 20

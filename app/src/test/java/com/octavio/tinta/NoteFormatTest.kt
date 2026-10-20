@@ -109,4 +109,14 @@ class NoteFormatTest {
         val back = DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readGroups(it, groups.size) }
         assertEquals(mapOf(1 to 42L, 2 to 42L, 4 to -7L), back)
     }
+
+    @Test
+    fun notesWithoutDashedLinesKeepTheOlderVersion() {
+        // Sin líneas a rayas se guarda la 8: la abren también las versiones anteriores de la app.
+        assertEquals(8, NoteFormat.versionFor(hasGroups = false))
+        assertEquals(NoteFormat.VERSION, NoteFormat.versionFor(hasGroups = true))
+        val header = NoteFormat.Header("Vieja", Background.GRID, 1L, 2L, Viewport(), 0, version = 8)
+        val bytes = ByteArrayOutputStream().also { buf -> DataOutputStream(buf).use { NoteFormat.writeHeader(it, header) } }.toByteArray()
+        assertEquals(8, DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readHeader(it) }.version)
+    }
 }
