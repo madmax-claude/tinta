@@ -154,8 +154,8 @@ class SearchPanel(context: Context) : LinearLayout(context) {
         status.visibility = if (text.isNullOrEmpty()) GONE else VISIBLE
     }
 
-    /** Panel pintado de un color oscuro: los renglones nuevos, en claro. */
-    var dark = false
+    /** Color elegido para el panel: los renglones nuevos, con textos que se lean sobre él. */
+    var barColor: Int? = null
 
     fun setResults(results: List<Result>) {
         list.removeAllViews()
@@ -184,7 +184,7 @@ class SearchPanel(context: Context) : LinearLayout(context) {
                 setOnClickListener { pick(k) }
             })
         }
-        if (dark) Chrome.lighten(list)
+        barColor?.let { Chrome.contrast(list, it) }
         updateArrows()
     }
 

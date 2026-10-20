@@ -6,7 +6,7 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.TextView
-import androidx.core.graphics.ColorUtils
+import com.octavio.tinta.model.Colors
 
 /**
  * Los colores elegidos en Configuración para la barra de arriba, las barras de herramientas y la
@@ -14,69 +14,62 @@ import androidx.core.graphics.ColorUtils
  * sus íconos y textos pasan a claro para que se lean.
  */
 object Chrome {
-    /** Para elegir: claros, medios y oscuros (y con "+", cualquiera). */
+    /** Para elegir (y con "+", cualquiera). */
     val COLORS = listOf(
-        // Claros
         0xFFFFFFFF.toInt(), // blanco
-        0xFFECEFF1.toInt(), // gris claro
         0xFFF3E9D2.toInt(), // arena
         0xFFFFF3C4.toInt(), // amarillo
-        0xFFFFE0C2.toInt(), // durazno
         0xFFFBE3EC.toInt(), // rosa
-        0xFFECE3F7.toInt(), // lila
         0xFFDCEBFA.toInt(), // celeste
-        0xFFD6F1F3.toInt(), // turquesa
         0xFFDDF3E4.toInt(), // menta
-        0xFFE9F2D3.toInt(), // pistacho
-        0xFFE7DED6.toInt(), // topo
-        // Medios
-        0xFFF2B33D.toInt(), // mostaza
         0xFFE8794A.toInt(), // naranja
-        0xFFD9536F.toInt(), // frambuesa
-        0xFF8E6CC9.toInt(), // violeta
         0xFF4A90D9.toInt(), // azul claro
-        0xFF2BA3A0.toInt(), // verde agua
-        0xFF5DAA5A.toInt(), // verde
-        // Oscuros
         0xFF2F5DA8.toInt(), // azul
-        0xFF1F3A5F.toInt(), // azul marino
         0xFF2E7D5B.toInt(), // verde oscuro
         0xFF8E2B3A.toInt(), // bordó
-        0xFF5B3A29.toInt(), // marrón
         0xFF37393E.toInt(), // gris oscuro
         0xFF1E1F22.toInt(), // negro
     )
 
     private const val LIGHT = 0xFFF2F2F2.toInt()
     private const val LIGHT_MUTED = 0xFFC4C7CC.toInt()
+    private const val DARK = 0xFF1F1F1F.toInt()
+    private const val DARK_MUTED = 0xFF5F6368.toInt()
 
-    fun isDark(color: Int) = ColorUtils.calculateLuminance(color) < 0.4
+    /**
+     * Si sobre `color` se lee mejor un texto claro: por contraste, no por el modo (en modo oscuro
+     * los textos son claros y sobre una barra clara no se leían).
+     */
+    fun isDark(color: Int) = Colors.prefersLightText(color)
 
     /** Texto principal y secundario que se leen sobre `color`. */
-    fun ink(color: Int, fallback: Int) = if (isDark(color)) LIGHT else fallback
-    fun muted(color: Int, fallback: Int) = if (isDark(color)) LIGHT_MUTED else fallback
+    fun ink(color: Int) = if (isDark(color)) LIGHT else DARK
+    fun muted(color: Int) = if (isDark(color)) LIGHT_MUTED else DARK_MUTED
 
-    /** Pinta la barra `view` (null: la deja como es). */
+    /** Pinta la barra `view` (null: la deja como es) y le pone textos e íconos que se lean. */
     fun paint(view: View, color: Int?) {
         if (color == null) return
         if (view.background == null) view.setBackgroundColor(color) else view.backgroundTintList = ColorStateList.valueOf(color)
-        if (isDark(color)) lighten(view)
+        contrast(view, color)
     }
 
-    /** Íconos y textos claros, adentro de `v` (salvo los lápices, que muestran su color). */
-    fun lighten(v: View) {
+    /** Textos e íconos adentro de `v` que se lean sobre `color` (salvo los lápices y las pestañas). */
+    fun contrast(v: View, color: Int) {
+        val ink = ink(color)
+        val muted = muted(color)
         when (v) {
-            is PenButton -> Unit
+            is PenButton, is TabStrip -> Unit
             is EditText -> {
-                v.setTextColor(LIGHT)
-                v.setHintTextColor(LIGHT_MUTED)
+                v.setTextColor(ink)
+                v.setHintTextColor(muted)
+                v.compoundDrawableTintList = ColorStateList.valueOf(muted)
             }
             is TextView -> {
-                v.setTextColor(LIGHT)
-                v.compoundDrawableTintList = ColorStateList.valueOf(LIGHT)
+                v.setTextColor(ink)
+                v.compoundDrawableTintList = ColorStateList.valueOf(ink)
             }
-            is ImageView -> v.imageTintList = ColorStateList.valueOf(LIGHT)
-            is ViewGroup -> for (i in 0 until v.childCount) lighten(v.getChildAt(i))
+            is ImageView -> v.imageTintList = ColorStateList.valueOf(ink)
+            is ViewGroup -> for (i in 0 until v.childCount) contrast(v.getChildAt(i), color)
         }
     }
 }

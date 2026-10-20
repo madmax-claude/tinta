@@ -61,7 +61,7 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
                     textSize = if (id == active) 16f else 14f
                     val under = if (id == active) activeColor ?: barColor else barColor
                     val normal = context.getColor(if (id == active) R.color.ink else R.color.muted)
-                    setTextColor(if (under == null) normal else if (id == active) Chrome.ink(under, normal) else Chrome.muted(under, normal))
+                    setTextColor(if (under == null) normal else if (id == active) Chrome.ink(under) else Chrome.muted(under))
                     maxWidth = context.dp(if (id == active) 260f else 170f).toInt()
                     isSingleLine = true
                     ellipsize = TextUtils.TruncateAt.END
@@ -74,7 +74,7 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
                     setPadding(q, q, q, q)
                     alpha = 0.6f
                     contentDescription = "Cerrar «$title»"
-                    (if (id == active) activeColor ?: barColor else barColor)?.takeIf(Chrome::isDark)?.let { imageTintList = android.content.res.ColorStateList.valueOf(Chrome.ink(it, 0)) }
+                    (if (id == active) activeColor ?: barColor else barColor)?.let { imageTintList = android.content.res.ColorStateList.valueOf(Chrome.ink(it)) }
                     setOnClickListener { callbacks?.onTabClose(id) }
                 }, LinearLayout.LayoutParams(context.dp(30f).toInt(), context.dp(30f).toInt()))
                 setOnClickListener { callbacks?.onTabClick(id) }
@@ -92,7 +92,7 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
             setImageResource(R.drawable.ic_add)
             background = context.getDrawable(R.drawable.bg_tool)
             contentDescription = "Abrir otra nota en una pestaña"
-            barColor?.takeIf(Chrome::isDark)?.let { imageTintList = android.content.res.ColorStateList.valueOf(Chrome.ink(it, 0)) }
+            barColor?.let { imageTintList = android.content.res.ColorStateList.valueOf(Chrome.ink(it)) }
             tip(contentDescription)
             setOnClickListener { callbacks?.onAddTab(it) }
         }, LinearLayout.LayoutParams(context.dp(40f).toInt(), context.dp(40f).toInt()))

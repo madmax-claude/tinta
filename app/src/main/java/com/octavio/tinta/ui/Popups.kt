@@ -27,6 +27,7 @@ import com.octavio.tinta.dp
 import com.octavio.tinta.tip
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
+import com.octavio.tinta.model.Dash
 import com.octavio.tinta.model.LassoFilter
 import com.octavio.tinta.model.PageLayout
 import com.octavio.tinta.model.PageSize
@@ -41,16 +42,10 @@ object Popups {
     private val PAPER_COLORS = listOf(
         0xFFFFFFFF.toInt(), // blanco
         0xFFFFF6D5.toInt(), // amarillo
-        0xFFFFEFD9.toInt(), // durazno
         0xFFF4EBDC.toInt(), // sepia
-        0xFFEDE3D3.toInt(), // papel madera claro
         0xFFE8F4E6.toInt(), // verde
-        0xFFE6F5F2.toInt(), // agua
         0xFFE5F0FA.toInt(), // celeste
         0xFFFBE8EE.toInt(), // rosa
-        0xFFEFEAF8.toInt(), // lila
-        0xFFEDEDED.toInt(), // gris
-        0xFFDCDCDC.toInt(), // gris medio
     )
 
 
@@ -136,6 +131,24 @@ object Popups {
         val picker = ColorPickerView(c)
         box.addView(picker, topMargin(c, 8f))
 
+        // Tipo de línea: continua, rayas, puntos, raya y punto.
+        box.addView(label(c, "Tipo de línea", 15f), topMargin(c, 12f))
+        val dashRow = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
+        box.addView(dashRow, topMargin(c, 6f))
+        val dashCells = Dash.entries.associateWith { d ->
+            LinearLayout(c).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                background = c.getDrawable(R.drawable.bg_tool)
+                val p = c.dp(4f).toInt()
+                setPadding(p, p, p, p)
+                addView(DashSample(c, d, dark), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, c.dp(22f).toInt()))
+                addView(label(c, d.label, 12f).apply { gravity = Gravity.CENTER })
+                contentDescription = d.label
+            }.also { dashRow.addView(it, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)) }
+        }
+        box.addView(hint(c, "Mientras escribís se ve continua; al levantar el lápiz queda con su forma."))
+
         // Línea recta
         @SuppressLint("UseSwitchCompatOrMaterialCode")
         val straight = Switch(c).apply {
@@ -185,6 +198,10 @@ object Popups {
             sensitivitySeek.progress = pen.sensitivity
             pressurePreview.pen = pen
             straight.isChecked = pen.straight
+            for ((d, v) in dashCells) {
+                v.isSelected = d == pen.dash
+                ((v as ViewGroup).getChildAt(0) as DashSample).color = shown(pen.color)
+            }
             grid.removeAllViews()
             val colors = (pen.tool.colors.toList() + savedColors()).distinct()
             for (color in colors) {
@@ -271,6 +288,14 @@ object Popups {
             pen = pen.copy(color = Appearance.stored(shownColor, pen.tool, dark))
             preview.pen = pen
             if (done) {
+                onChange(pen)
+                refresh()
+            }
+        }
+        for ((d, v) in dashCells) {
+            v.setOnClickListener {
+                if (pen.dash == d) return@setOnClickListener
+                pen = pen.copy(dash = d)
                 onChange(pen)
                 refresh()
             }
@@ -1013,5 +1038,32 @@ private class PageShape(
         val t = (height - h * s) / 2
         canvas.drawRect(l, t, l + w * s, t + h * s, fill)
         canvas.drawRect(l, t, l + w * s, t + h * s, edge)
+    }
+}
+
+/** Una muestra del tipo de línea, con el patrón y el color del lápiz. */
+@SuppressLint("ViewConstructor")
+class DashSample(context: Context, private val dash: Dash, dark: Boolean) : View(context) {
+    var color = if (dark) 0xFFE8E8E8.toInt() else 0xFF202124.toInt()
+        set(value) {
+            field = value
+            invalidate()
+        }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeWidth = context.dp(2.5f)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        paint.color = color
+        val w = paint.strokeWidth
+        val lengths = dash.lengths(w)
+        paint.pathEffect = lengths?.let { l ->
+            // El trazo redondo agrega medio grosor a cada punta: se descuenta del tramo.
+            android.graphics.DashPathEffect(FloatArray(l.size) { i -> if (i % 2 == 0) (l[i] - w).coerceAtLeast(0.01f) else l[i] + w }, 0f)
+        }
+        val y = height / 2f
+        canvas.drawLine(w * 2, y, width - w * 2, y, paint)
     }
 }

@@ -63,10 +63,16 @@ class PenButton(context: Context, private val dark: Boolean) : View(context) {
             it.setBounds((cx - s).toInt(), (cy - s).toInt(), (cx + s).toInt(), (cy + s).toInt())
             it.draw(canvas)
         }
-        if (p.straight) {
+        // Debajo, una raya si traza rectas; con su patrón si es a rayas o de puntos.
+        if (p.straight || p.dash != com.octavio.tinta.model.Dash.SOLID) {
             bar.color = context.getColor(R.color.ink)
             val y = cy + r + context.dp(4f)
-            canvas.drawLine(cx - context.dp(7f), y, cx + context.dp(7f), y, bar)
+            val half = context.dp(if (p.dash == com.octavio.tinta.model.Dash.SOLID) 7f else 11f)
+            val w = bar.strokeWidth
+            bar.pathEffect = p.dash.lengths(w)?.let { l ->
+                android.graphics.DashPathEffect(FloatArray(l.size) { i -> if (i % 2 == 0) (l[i] - w).coerceAtLeast(0.01f) else l[i] + w }, 0f)
+            }
+            canvas.drawLine(cx - half, y, cx + half, y, bar)
         }
         if (isSelected) canvas.drawCircle(cx, cy, r + context.dp(4f), ring)
     }

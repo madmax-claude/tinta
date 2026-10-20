@@ -259,14 +259,14 @@ class MainActivity : TintaActivity() {
 
     // --- Colores del menú principal (Configuración) ---
 
-    /** La barra de carpetas es oscura: sus renglones (que se rearman) van en claro. */
-    private var menuDark = false
+    /** El color de la barra de carpetas: sus renglones (que se rearman) con textos que se lean. */
+    private var menuColor: Int? = null
 
     private fun applyColors() {
         prefs.menuColor?.let { c ->
             val bar = findViewById<View>(R.id.sidebar)
             Chrome.paint(bar, c)
-            menuDark = Chrome.isDark(c)
+            menuColor = c
         }
         prefs.listColor?.let { c ->
             // El fondo de atrás de todo (también detrás de las barras del sistema).
@@ -275,12 +275,12 @@ class MainActivity : TintaActivity() {
                 isAppearanceLightStatusBars = !Chrome.isDark(c)
                 isAppearanceLightNavigationBars = !Chrome.isDark(c)
             }
-            if (Chrome.isDark(c)) {
-                // Los textos sobre el fondo; las tarjetas y el buscador tienen su propio fondo.
-                for (id in listOf(R.id.folder_title, R.id.empty, R.id.search_status, R.id.import_jnotes, R.id.new_note)) {
-                    Chrome.lighten(findViewById(id))
-                }
-                crumbColor = Chrome.muted(c, getColor(R.color.muted))
+            // Los textos sobre el fondo (las tarjetas y el buscador tienen su propio fondo).
+            for (id in listOf(R.id.folder_title, R.id.empty, R.id.search_status)) Chrome.contrast(findViewById(id), c)
+            crumbColor = Chrome.muted(c)
+            // Los botones de arriba, en azul salvo que no se lean: entonces, como el texto.
+            if (com.octavio.tinta.model.Colors.contrast(c, getColor(R.color.accent)) < 3.0) {
+                for (id in listOf(R.id.import_jnotes, R.id.new_note)) Chrome.contrast(findViewById(id), c)
             }
         }
     }
@@ -324,7 +324,7 @@ class MainActivity : TintaActivity() {
                 setTextColor(getColor(R.color.muted))
                 setPadding(0, dp(10f).toInt(), 0, dp(2f).toInt())
             })
-            box.addView(Popups.colorChoices(this, original, com.octavio.tinta.ui.Chrome.COLORS, current, columns = 15, onPick = save))
+            box.addView(Popups.colorChoices(this, original, com.octavio.tinta.ui.Chrome.COLORS, current, columns = 8, onPick = save))
         }
         colorRow(getString(R.string.color_top_bar), getColor(R.color.chrome), prefs.topBarColor) { prefs.topBarColor = it }
         colorRow(getString(R.string.color_tools), getColor(R.color.toolbar), prefs.toolsColor) { prefs.toolsColor = it }
@@ -416,7 +416,7 @@ class MainActivity : TintaActivity() {
         addFolderRow(if (here != null) getString(R.string.new_folder_in, here) else getString(R.string.new_folder), R.drawable.ic_folder_add, -1, false, depth = 0) {
             newFolder()
         }
-        if (menuDark) Chrome.lighten(foldersBox)
+        menuColor?.let { Chrome.contrast(foldersBox, it) }
     }
 
     /** Color de las partes de la ruta que llevan a otra carpeta (con un fondo oscuro, más claro). */

@@ -187,7 +187,7 @@ class EditorActivity :
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_editor)
-        findViewById<View>(R.id.root).padForSystemBars()
+        findViewById<View>(R.id.root).padForSystemBars { prefs.fullscreen }
         store = NoteStore.get(this)
         prefs = Prefs(this)
         Diag.init(this)
@@ -1091,8 +1091,8 @@ class EditorActivity :
             dock.paint(c)
             pageStrip.paint(c)
             for (bar in listOf(selectionBar, captureBar, zoomBar, timer, searchPanel)) Chrome.paint(bar, c)
-            timer.textColor = Chrome.ink(c, getColor(R.color.ink))
-            searchPanel.dark = Chrome.isDark(c)
+            timer.textColor = Chrome.ink(c)
+            searchPanel.barColor = c
         }
     }
 
@@ -1319,6 +1319,8 @@ class EditorActivity :
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
+        // Que el lugar de las barras del sistema se saque (o vuelva) ya, sin esperar al sistema.
+        androidx.core.view.ViewCompat.requestApplyInsets(findViewById(R.id.root))
     }
 
     override fun onDockOrder(order: List<ToolDock.Tool>) {

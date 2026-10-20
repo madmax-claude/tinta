@@ -39,6 +39,7 @@ import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
 import com.octavio.tinta.model.Clipboard
 import com.octavio.tinta.model.Cut
+import com.octavio.tinta.model.Dash
 import com.octavio.tinta.model.History
 import com.octavio.tinta.model.InkStroke
 import com.octavio.tinta.model.Graph2D
@@ -277,11 +278,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         addView(wet, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         wet.addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-                val added = strokes.map { (id, s) ->
+                val added = strokes.flatMap { (id, s) ->
                     val p = strokePens.remove(id) ?: pen
                     // En modo oscuro el trazo en curso usa el color de pantalla; se guarda el real.
                     val color = p.tool.storedColor(p.color)
-                    InkStroke(p.tool, if (s.brush.colorIntArgb == color) s else s.copy(s.brush.copyWithColorIntArgb(color)), p.sensitivity)
+                    styled(InkStroke(p.tool, if (s.brush.colorIntArgb == color) s else s.copy(s.brush.copyWithColorIntArgb(color)), p.sensitivity), p.dash)
                 }
                 addFresh(added)
                 wet.removeFinishedStrokes(strokes.keys)
@@ -1054,10 +1055,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private fun commitShape() {
         val s = shapePreview
+        val dash = (shapePen ?: pen).dash
         shape = null
         shapePreview = null
         shapePen = null
-        if (s != null) addFresh(listOf(s)) else dry.invalidate()
+        if (s != null) addFresh(styled(s, dash)) else dry.invalidate()
         if (penStroke == null) endWritingClip()
     }
 
@@ -1090,7 +1092,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val line = linePreview
         lineStart = null
         linePreview = null
-        if (line != null) addFresh(listOf(line)) else dry.invalidate()
+        if (line != null) addFresh(styled(line, pen.dash)) else dry.invalidate()
         endWritingClip()
     }
 
@@ -1146,6 +1148,24 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val parts = Cut.inside(points, page.left + pad, page.top + pad, page.right - pad, page.bottom - pad, (s.size / 2).coerceAtLeast(0.5f))
             ?: return listOf(s)
         return rebuild(s, stroke, parts)
+    }
+
+    /**
+     * Un trazo de un lápiz a rayas o de puntos: se parte en los tramos con tinta (cada uno es un
+     * trazo). Mientras se escribe se ve continuo; al levantar el lápiz queda con su patrón.
+     */
+    private fun styled(s: InkStroke, dash: Dash): List<InkStroke> {
+        val lengths = dash.lengths(s.size) ?: return listOf(s)
+        val stroke = s.stroke ?: return listOf(s)
+        val inputs = stroke.inputs
+        if (inputs.size < 2) return listOf(s)
+        val p = StrokeInput()
+        val points = ArrayList<Cut.Point>(inputs.size)
+        for (k in 0 until inputs.size) {
+            inputs.populate(k, p)
+            points.add(Cut.Point(p.x, p.y, p.elapsedTimeMillis.toFloat(), p.pressure, p.tiltRadians, p.orientationRadians))
+        }
+        return rebuild(s, stroke, Dash.split(points, lengths)).ifEmpty { listOf(s) }
     }
 
     /** Arma un trazo por cada parte (puntos de [Cut]) con el pincel del original. */

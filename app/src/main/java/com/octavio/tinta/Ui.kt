@@ -41,11 +41,19 @@ fun Context.hint(text: CharSequence, long: Boolean = false) {
     if (Help.on) toast(text, long)
 }
 
-/** Con edge-to-edge las barras del sistema quedan encima: se compensa con padding. */
-fun View.padForSystemBars() {
+/**
+ * Con edge-to-edge las barras del sistema quedan encima: se compensa con padding. Con `fullscreen`
+ * en true no se deja lugar (si el sistema no llegó a esconder una barra, por ejemplo con la
+ * pantalla dividida, se dibuja debajo de ella en vez de dejar una franja).
+ */
+fun View.padForSystemBars(fullscreen: () -> Boolean = { false }) {
     ViewCompat.setOnApplyWindowInsetsListener(this) { v, insets ->
-        val b = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-        v.setPadding(b.left, b.top, b.right, b.bottom)
+        if (fullscreen()) {
+            v.setPadding(0, 0, 0, 0)
+        } else {
+            val b = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            v.setPadding(b.left, b.top, b.right, b.bottom)
+        }
         WindowInsetsCompat.CONSUMED
     }
 }
