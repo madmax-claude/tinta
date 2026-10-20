@@ -4,3 +4,12 @@ build/
 local.properties
 *.apk
 .idea/
+
+# Notas y apuntes: nunca al repositorio.
+*.Jnotes
+*.jnotes
+*.Jzip
+*.tinta
+*.pdf
+orden.json
+carpetas.json

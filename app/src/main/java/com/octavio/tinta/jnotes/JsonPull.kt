@@ -3,6 +3,7 @@ package com.octavio.tinta.jnotes
 import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 
 /**
  * Lectura secuencial con búfer propio y un límite opcional de bytes. Las notas de Jnotes traen
@@ -72,6 +73,26 @@ class ByteSource(private val input: InputStream) {
             }
             val step = minOf(left, (end - pos).toLong(), remaining).toInt()
             if (step <= 0) throw EOFException("el archivo está cortado")
+            pos += step
+            remaining -= step
+            left -= step
+        }
+    }
+
+    /** Pasa `n` bytes a `out` sin juntarlos en memoria (el PDF de una nota puede tener decenas de MB). */
+    fun copyTo(out: OutputStream, n: Long) {
+        var left = n
+        while (left > 0) {
+            if (pos == end) {
+                val c = read()
+                if (c < 0) throw EOFException("el archivo está cortado")
+                out.write(c)
+                left--
+                continue
+            }
+            val step = minOf(left, (end - pos).toLong(), remaining).toInt()
+            if (step <= 0) throw EOFException("el archivo está cortado")
+            out.write(buf, pos, step)
             pos += step
             remaining -= step
             left -= step
@@ -245,6 +266,15 @@ class JsonPull(private val src: ByteSource) {
         }
         return if (negative) -value else value
     }
+
+    /** `true` o `false`; cualquier otro valor se saltea y cuenta como `false`. */
+    fun bool(): Boolean = when (peek()) {
+        't'.code -> { peeked = -2; literal("rue"); true }
+        else -> { skipValue(); false }
+    }
+
+    /** Texto, o "" si es null u otra cosa. */
+    fun stringOrEmpty(): String = if (peek() == '"'.code) string() else "".also { skipValue() }
 
     fun long(): Long = double().let { if (it.isNaN()) 0L else it.toLong() }
 

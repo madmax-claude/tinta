@@ -13,6 +13,7 @@ import android.util.LruCache
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -31,15 +32,17 @@ import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.jnotes.JnotesImporter
 import com.octavio.tinta.model.Find
-import com.octavio.tinta.model.NoteInfo
 import com.octavio.tinta.model.Note
+import com.octavio.tinta.model.NoteInfo
 import com.octavio.tinta.storage.CloudBackup
-import com.octavio.tinta.ui.Chrome
-import com.octavio.tinta.ui.Popups
 import com.octavio.tinta.storage.HandText
 import com.octavio.tinta.storage.Imports
+import com.octavio.tinta.storage.JnotesBatch
 import com.octavio.tinta.storage.Library
 import com.octavio.tinta.storage.NoteStore
+import com.octavio.tinta.ui.Chrome
+import com.octavio.tinta.ui.Popups
+import java.io.File
 import java.util.concurrent.Executors
 
 class MainActivity : TintaActivity() {
@@ -233,7 +236,9 @@ class MainActivity : TintaActivity() {
         hint("Trayendo las notas de la copia…")
         Thread({
             val result = runCatching {
-                contentResolver.openInputStream(uri)?.use { cloud.restore(it, EditorActivity::isOpen) } ?: error("no se pudo leer el archivo")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    cloud.restore(input, EditorActivity::isOpen) { text -> runOnUiThread { cloudRow.text = text } }
+                } ?: error("no se pudo leer el archivo")
             }
             runOnUiThread {
                 result.onSuccess { r ->
@@ -244,7 +249,9 @@ class MainActivity : TintaActivity() {
                     if (r.updated > 0) parts.add(n(r.updated, "actualizada", "actualizadas"))
                     if (r.skipped > 0) parts.add(n(r.skipped, "ya estaba al día", "ya estaban al día"))
                     if (r.busy.isNotEmpty()) parts.add("sin tocar porque están abiertas: ${r.busy.joinToString(", ")}")
+                    if (r.redrawn > 0) parts.add(n(r.redrawn, "página de PDF dibujada de nuevo", "páginas de PDF dibujadas de nuevo"))
                     toast(if (parts.isEmpty()) "La copia no tenía notas" else parts.joinToString("; "), long = true)
+                    showCloudStatus()
                     refresh()
                 }.onFailure { toast("No se pudo traer la copia: ${it.message}", long = true) }
             }
@@ -699,6 +706,10 @@ class MainActivity : TintaActivity() {
 
     /** Un PDF o un .Jnotes abierto o compartido desde otra app (por ejemplo, desde el propio Jnotes). */
     private fun handleIncoming(intent: Intent?) {
+        if (intent?.action == JnotesBatch.ACTION) {
+            if (JnotesBatch.pending(this)) importJnotesBatch() else toast("No hay notas de Jnotes para importar")
+            return
+        }
         val uris = when (intent?.action) {
             Intent.ACTION_VIEW -> listOfNotNull(intent.data)
             Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
@@ -725,9 +736,13 @@ class MainActivity : TintaActivity() {
                         "«${n.title}»: ${n.images.size} páginas para escribir encima"
                     } else {
                         val id = store.newId()
+                        // En una nota de PDF, el PDF queda en la carpeta de medios (ver Imports.ORIGINAL).
+                        val pdf = File(store.mediaDir(id), Imports.ORIGINAL)
                         val r = contentResolver.openInputStream(uri)?.use {
-                            JnotesImporter.import(it, id, title, resources.displayMetrics.density, store.mediaDir(id))
+                            JnotesImporter.import(it, id, title, resources.displayMetrics.density, store.mediaDir(id), pdf)
                         } ?: error("no se pudo leer el archivo")
+                        // Las páginas van debajo de lo escrito.
+                        if (r.pdfPages.isNotEmpty()) r.note.images.addAll(0, Imports.pdfPages(pdf, r.pdfPages, store.mediaDir(id)))
                         val n = r.note
                         finishImport(n, target)
                         buildString {
@@ -741,6 +756,49 @@ class MainActivity : TintaActivity() {
             }
             runOnUiThread {
                 toast(messages.joinToString("\n"), long = true)
+                refresh()
+            }
+        }
+    }
+
+    /**
+     * Todas las notas de Jnotes que se dejaron por adb en `files/importar-jnotes/` (ver
+     * [JnotesBatch]), con un cartel de avance. La pantalla queda encendida mientras dura.
+     */
+    private fun importJnotesBatch() {
+        val text = TextView(this).apply {
+            val pad = (24 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+            text = "Preparando…"
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Importando de Jnotes")
+            .setView(text)
+            .setPositiveButton("Ocultar", null)
+            .setCancelable(false)
+            .show()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val density = resources.displayMetrics.density
+        store.io.execute {
+            val summary = runCatching {
+                JnotesBatch.run(this, store, density) { i, n, title ->
+                    runOnUiThread { if (!isDestroyed) text.text = "Nota $i de $n\n$title" }
+                }
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                dialog.dismiss()
+                val s = summary.getOrNull()
+                toast(
+                    if (s == null) "No se pudo importar: ${summary.exceptionOrNull()?.message}"
+                    else buildString {
+                        append("Jnotes: ${s.imported} notas importadas")
+                        if (s.skipped > 0) append(", ${s.skipped} ya estaban")
+                        if (s.failed.isNotEmpty()) append("\nCon error: ${s.failed.joinToString()}")
+                    },
+                    long = true,
+                )
                 refresh()
             }
         }

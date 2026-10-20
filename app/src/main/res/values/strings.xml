@@ -55,7 +55,7 @@
     <string name="search_notes">Buscar en las notas</string>
     <string name="no_previous_tool">El botón vuelve a la herramienta anterior: elegí otra primero</string>
     <string name="cloud_connect">Conectar Google Drive</string>
-    <string name="cloud_explain">Tinta va a guardar una copia de todas tus notas (con imágenes, carpetas y stickers) en un archivo de tu Google Drive, y la va a actualizar sola cuando salgas de una nota.\n\nEn la ventana que se abre ahora, tocá ☰ (arriba a la izquierda), elegí Drive y la carpeta donde guardarla, y tocá Guardar.</string>
+    <string name="cloud_explain">Tinta va a guardar una copia de todas tus notas (con imágenes, carpetas y stickers) en un archivo de tu Google Drive, y la va a actualizar sola una vez por día (o cuando toques «Subir ahora»).\n\nEn la ventana que se abre ahora, tocá ☰ (arriba a la izquierda), elegí Drive y la carpeta donde guardarla, y tocá Guardar.</string>
     <string name="cloud_choose">Elegir dónde guardar</string>
     <string name="cloud_restore_other">Restaurar desde una copia…</string>
     <string name="cloud_restore_confirm">¿Traer las notas de la copia? Se agregan las que faltan y se reemplazan las que en la copia están más nuevas. No se borra nada.</string>

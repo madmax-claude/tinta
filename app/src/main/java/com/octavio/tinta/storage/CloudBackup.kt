@@ -27,6 +27,9 @@ import java.util.zip.ZipOutputStream
  * La copia es un .zip con `notes/` (las notas, sus miniaturas, sus medios y `carpetas.json`),
  * `stickers/` y `tinta-copia.json` (versión y fecha). Restaurar trae las notas que faltan y las
  * que en la copia están más nuevas; nunca borra.
+ *
+ * Las páginas de los PDF dibujadas como imagen no van si está el PDF original de la nota
+ * ([Imports.isPage]): son casi todo el peso. Al restaurar se vuelven a dibujar.
  */
 class CloudBackup private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences("tinta-nube", Context.MODE_PRIVATE)
@@ -83,7 +86,7 @@ class CloudBackup private constructor(private val context: Context) {
 
     /**
      * Sube la copia si hay cambios desde la última (o siempre, con `force`). Sin `force`, a lo
-     * sumo una vez cada [MIN_INTERVAL_MS]. Las notas se empaquetan en el hilo de disco de
+     * sumo una vez cada `minIntervalMs`. Las notas se empaquetan en el hilo de disco de
      * [NoteStore], después de los guardados pendientes, así la copia nunca tiene una nota a medias.
      */
     fun backup(force: Boolean = false, minIntervalMs: Long = MIN_INTERVAL_MS) {
@@ -153,7 +156,7 @@ class CloudBackup private constructor(private val context: Context) {
             for (top in listOf(NOTES, STICKERS)) {
                 val dir = File(files, top)
                 if (!dir.exists()) continue
-                dir.walkTopDown().filter { it.isFile && !it.name.endsWith(".tmp") }.forEach { f ->
+                dir.walkTopDown().filter { it.isFile && !it.name.endsWith(".tmp") && !Imports.isPage(it) }.forEach { f ->
                     zip.putNextEntry(ZipEntry(top + "/" + f.relativeTo(dir).invariantSeparatorsPath).apply { time = f.lastModified() })
                     FileInputStream(f).use { it.copyTo(zip, 1 shl 16) }
                     zip.closeEntry()
@@ -162,14 +165,15 @@ class CloudBackup private constructor(private val context: Context) {
         }
     }
 
-    class Restored(val added: Int, val updated: Int, val skipped: Int, val busy: List<String>, val ids: List<String>)
+    class Restored(val added: Int, val updated: Int, val skipped: Int, val busy: List<String>, val ids: List<String>, val redrawn: Int = 0)
 
     /**
      * Trae lo que hay en la copia: notas que no están acá y notas que en la copia son más nuevas
      * (según la fecha guardada en cada nota). Las que están abiertas en el editor (`isOpen`) no se
-     * tocan. Carpetas y stickers se suman. Llamar fuera del hilo de la pantalla.
+     * tocan. Carpetas y stickers se suman. Después se dibujan las páginas de PDF que no venían en
+     * la copia; `progress` recibe un texto para mostrar. Llamar fuera del hilo de la pantalla.
      */
-    fun restore(input: InputStream, isOpen: (String) -> Boolean): Restored {
+    fun restore(input: InputStream, isOpen: (String) -> Boolean, progress: (String) -> Unit = {}): Restored {
         val store = NoteStore.get(context)
         val stage = File(context.cacheDir, "restaurar").apply {
             deleteRecursively()
@@ -178,7 +182,18 @@ class CloudBackup private constructor(private val context: Context) {
         try {
             unzip(input, stage)
             if (!File(stage, MANIFEST).exists()) error("ese archivo no es una copia de Tinta")
-            return store.io.submit<Restored> { merge(stage, store, isOpen) }.get()
+            val r = store.io.submit<Restored> { merge(stage, store, isOpen) }.get()
+            stage.deleteRecursively()
+            var redrawn = 0
+            r.ids.forEachIndexed { i, id ->
+                runCatching {
+                    val note = store.load(id)
+                    redrawn += Imports.redrawMissing(note, store.mediaDir(id)) { k, n ->
+                        progress("Dibujando las páginas de «${note.title}» (${i + 1}/${r.ids.size}): $k de $n")
+                    }
+                }.onFailure { Log.w(TAG, "páginas de $id", it) }
+            }
+            return Restored(r.added, r.updated, r.skipped, r.busy, r.ids, redrawn)
         } finally {
             stage.deleteRecursively()
         }
@@ -271,11 +286,14 @@ class CloudBackup private constructor(private val context: Context) {
         private const val NOTES = "notes"
         private const val STICKERS = "stickers"
 
-        /** Al salir de una nota, una copia cada este tiempo como mucho. */
-        const val MIN_INTERVAL_MS = 2 * 60_000L
+        /**
+         * La copia automática, como mucho una vez por día: con muchas notas el zip pesa cientos
+         * de MB y se sube entero cada vez. "Subir ahora" la hace en el momento.
+         */
+        const val MIN_INTERVAL_MS = 24 * 60 * 60_000L
 
-        /** Mientras se escribe, cada bastante más: la copia entera puede pesar decenas de MB. */
-        const val WHILE_WRITING_MS = 15 * 60_000L
+        /** Mientras se escribe, lo mismo. */
+        const val WHILE_WRITING_MS = MIN_INTERVAL_MS
 
         @Volatile private var instance: CloudBackup? = null
 

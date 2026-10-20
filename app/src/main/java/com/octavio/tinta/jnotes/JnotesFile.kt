@@ -2,6 +2,7 @@ package com.octavio.tinta.jnotes
 
 import java.io.BufferedInputStream
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.util.zip.ZipInputStream
@@ -15,7 +16,17 @@ import java.util.zip.ZipInputStream
  *             mientras int == 1: UTF tipo, UTF origen, UTF id, long largo_json, UTF id_padre,
  *             UTF ruta, UTF largo_blob, json, blob.
  *
- * Los puntos de un trazo son relativos a un desplazamiento (h, i): posición = punto - (h, i).
+ * Hay tres clases de nota (campo `c` de NOTE): 1 cuaderno de hojas, 3 PDF para escribir encima y
+ * 5 lienzo infinito. En el lienzo infinito los trazos van en registros NBSTROKE y sus puntos son
+ * relativos a un desplazamiento (h, i): posición = punto - (h, i). En los cuadernos y los PDF van en
+ * registros STROKE (`a` hoja, `b` orden, `c` pincel) con los puntos ya en coordenadas de la hoja
+ * (150 ppp: una A4 mide 1240 × 1754). Los campos `r`/`s`/`t` del pincel son el último movimiento
+ * con el lazo, que ya está aplicado a los puntos: no se usan.
+ *
+ * En un cuaderno, la hoja con `i` = true es la tapa (la primera hoja, con la imagen del registro
+ * COVER de fondo). En un PDF, la hoja `c` es la página `c` del PDF que viene en el registro PDF,
+ * que Jnotes reescribe con las hojas agregadas a mano ya dibujadas (renglones o cuadrícula).
+ *
  * Se lee todo en flujo: una nota real tiene ~60 MB de JSON y ~500.000 puntos de 15 campos.
  */
 object JnotesFile {
@@ -49,15 +60,43 @@ object JnotesFile {
         val viewX: Float = Float.NaN,
         val viewY: Float = Float.NaN,
         val viewZoom: Float = Float.NaN,
+        /** Imagen de la tapa (JPG/PNG) si es la tapa de un cuaderno. */
+        val cover: ByteArray? = null,
     )
 
-    private class PageMeta(val width: Float, val height: Float, val viewX: Float, val viewY: Float, val viewZoom: Float)
+    private class PageMeta(
+        val width: Float,
+        val height: Float,
+        val viewX: Float,
+        val viewY: Float,
+        val viewZoom: Float,
+        val index: Int,
+        val coverName: String,
+    )
 
-    class JNote(val title: String, val pages: List<JPage>)
+    /**
+     * `kind`: [NOTEBOOK], [PDF] o [INFINITE] (0 si no se sabe). `folder`: id de la carpeta de
+     * Jnotes ("" si está suelta). `paper`: fondo de las hojas ("PageBg/White_Graph_Paper"...) y
+     * `paperColor` su color ARGB. `hasPdf`: el PDF de la nota se copió al archivo pedido.
+     */
+    class JNote(
+        val title: String,
+        val pages: List<JPage>,
+        val kind: Int = 0,
+        val folder: String = "",
+        val paper: String = "",
+        val paperColor: Int = 0,
+        val hasPdf: Boolean = false,
+    )
+
+    const val NOTEBOOK = 1
+    const val PDF = 3
+    const val INFINITE = 5
 
     fun parse(data: ByteArray): JNote = parse(ByteArrayInputStream(data))
 
-    fun parse(input: InputStream): JNote {
+    /** `pdfOut`: dónde dejar el PDF de una nota de PDF (null para no copiarlo). */
+    fun parse(input: InputStream, pdfOut: File? = null): JNote {
         val src = ByteSource(unzip(input))
         val magic = src.utf()
         if (magic != "TRY") throw IOException("no parece un archivo de Jnotes (cabecera \"$magic\")")
@@ -65,6 +104,12 @@ object JnotesFile {
         src.utf()
 
         var title = ""
+        var kind = 0
+        var folder = ""
+        var paper = ""
+        var paperColor = 0
+        var hasPdf = false
+        val covers = HashMap<String, ByteArray>()
         val pageMeta = LinkedHashMap<String, PageMeta>()
         val strokes = LinkedHashMap<String, MutableList<JStroke>>()
         val images = LinkedHashMap<String, MutableList<JImage>>()
@@ -86,15 +131,32 @@ object JnotesFile {
             val json = JsonPull(src)
             var image: Fields? = null
             when (type) {
-                "NOTE" -> json.obj { k -> if (k == "b" && title.isEmpty()) title = json.string() else json.skipValue() }
+                "NOTE" -> json.obj { k ->
+                    when {
+                        k == "b" && title.isEmpty() -> title = json.stringOrEmpty()
+                        k == "c" -> kind = json.int()
+                        k == "i" -> folder = json.stringOrEmpty()
+                        k == "p" -> background(json.stringOrEmpty())?.let { (p, c) ->
+                            paper = p
+                            paperColor = c
+                        }
+                        else -> json.skipValue()
+                    }
+                }
                 "PAGE" -> {
                     var w = 1240f
                     var h = 1754f
                     var m = Float.NaN
                     var n = Float.NaN
                     var o = Float.NaN
+                    var index = -1
+                    var cover = false
+                    var coverPath = ""
                     json.obj { k ->
                         when (k) {
+                            "c" -> index = json.int()
+                            "i" -> cover = json.bool()
+                            "d" -> coverPath = json.stringOrEmpty()
                             "k" -> w = json.double().toFloat()
                             "l" -> h = json.double().toFloat()
                             "m" -> m = json.double().toFloat()
@@ -103,11 +165,21 @@ object JnotesFile {
                             else -> json.skipValue()
                         }
                     }
-                    pageMeta[id] = PageMeta(w, h, -m, -n, o)
+                    val coverName = if (cover) coverPath.substringAfterLast('/') else ""
+                    pageMeta[id] = PageMeta(w, h, -m, -n, o, index, coverName)
                 }
-                "NBSTROKE" -> json.array {
-                    val (page, stroke) = stroke(json, points)
+                "NBSTROKE", "STROKE" -> json.array {
+                    val (page, stroke) = stroke(json, points, paged = type == "STROKE")
                     strokes.getOrPut(page) { mutableListOf() }.add(stroke)
+                }
+                // Las imágenes de tapa vienen enteras en lugar del JSON; las miniaturas no hacen falta.
+                "COVER" -> if (!id.contains("_coverThumbnail") && jsonLength in 1..MAX_IMAGE_BYTES) {
+                    covers[id.substringBeforeLast('.')] = src.bytes(jsonLength.toInt())
+                }
+                // El PDF también viene en lugar del JSON.
+                "PDF" -> if (pdfOut != null && !hasPdf && jsonLength > 0) {
+                    pdfOut.outputStream().buffered(1 shl 16).use { src.copyTo(it, jsonLength) }
+                    hasPdf = true
                 }
                 "IMAGE" -> image = numbers(json, setOf("x", "y", "i", "j", "c", "d", "e"), "b")
                 "TEXT" -> json.array {
@@ -144,22 +216,40 @@ object JnotesFile {
             }
         }
 
-        // Mismo orden que el script: primero las páginas declaradas, después las que sólo
-        // aparecen como destino de algún trazo, imagen o texto.
+        // Primero las páginas declaradas, en el orden de Jnotes (campo `c`) si lo tienen; después
+        // las que sólo aparecen como destino de algún trazo, imagen o texto.
         val pageIds = LinkedHashSet<String>().apply {
-            addAll(pageMeta.keys)
+            addAll(pageMeta.entries.sortedBy { if (it.value.index >= 0) it.value.index else Int.MAX_VALUE }.map { it.key })
             addAll(strokes.keys)
             addAll(images.keys)
             addAll(texts.keys)
         }
         val pages = pageIds.map { id ->
-            val meta = pageMeta[id] ?: PageMeta(1240f, 1754f, Float.NaN, Float.NaN, Float.NaN)
+            val meta = pageMeta[id] ?: PageMeta(1240f, 1754f, Float.NaN, Float.NaN, Float.NaN, -1, "")
             JPage(
                 meta.width, meta.height, strokes[id].orEmpty().sortedBy { it.order }, images[id].orEmpty(), texts[id].orEmpty(),
-                meta.viewX, meta.viewY, meta.viewZoom,
+                meta.viewX, meta.viewY, meta.viewZoom, covers[meta.coverName],
             )
         }
-        return JNote(title, pages)
+        return JNote(title, pages, kind, folder, paper, paperColor, hasPdf)
+    }
+
+    /** El fondo de la nota: JSON dentro de un texto, con `paperBg` y `bgColor`. */
+    private fun background(text: String): Pair<String, Int>? {
+        if (text.isBlank()) return null
+        var paper = ""
+        var color = 0
+        runCatching {
+            val json = JsonPull(ByteSource(ByteArrayInputStream(text.toByteArray())))
+            json.obj { k ->
+                when (k) {
+                    "paperBg" -> paper = json.stringOrEmpty()
+                    "bgColor" -> color = json.long().toInt()
+                    else -> json.skipValue()
+                }
+            }
+        }.getOrElse { return null }
+        return paper to color
     }
 
     /** Campos numéricos de un objeto JSON; los que faltan valen 0. */
@@ -188,8 +278,13 @@ object JnotesFile {
         return Fields(page, values, longs)
     }
 
-    /** Un trazo: `a` página, `c` orden, `h`/`i` desplazamiento, `b` pincel con los puntos en `k`. */
-    private fun stroke(json: JsonPull, points: PointBuffer): Pair<String, JStroke> {
+    /**
+     * Un trazo del lienzo infinito (NBSTROKE): `a` página, `c` orden, `h`/`i` desplazamiento, `b`
+     * pincel con los puntos en `k`. Con `paged` (STROKE): `a` página, `b` orden y `c` pincel.
+     */
+    private fun stroke(json: JsonPull, points: PointBuffer, paged: Boolean): Pair<String, JStroke> {
+        val orderKey = if (paged) "b" else "c"
+        val brushKey = if (paged) "c" else "b"
         var page = ""
         var order = 0L
         var dx = 0f
@@ -200,11 +295,11 @@ object JnotesFile {
         points.clear()
         json.obj { k ->
             when (k) {
-                "a" -> page = json.string()
-                "c" -> order = json.long()
-                "h" -> dx = json.double().toFloat()
-                "i" -> dy = json.double().toFloat()
-                "b" -> json.obj { bk ->
+                "a" -> page = json.stringOrEmpty()
+                orderKey -> order = json.long()
+                "h" -> if (paged) json.skipValue() else dx = json.double().toFloat()
+                "i" -> if (paged) json.skipValue() else dy = json.double().toFloat()
+                brushKey -> json.obj { bk ->
                     when (bk) {
                         "a" -> tool = json.int()
                         "c" -> color = json.long().toInt()

@@ -2,11 +2,18 @@ package com.octavio.tinta
 
 import com.octavio.tinta.jnotes.JnotesFile
 import com.octavio.tinta.jnotes.JnotesImporter
+import com.octavio.tinta.model.Background
+import com.octavio.tinta.model.PageLayout
+import com.octavio.tinta.model.PageSize
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
+import java.io.File
+import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -78,6 +85,105 @@ class JnotesFileTest {
         assertEquals(100f, pen.xs[0]) // 110 - h
         assertEquals(200f, pen.ys[0]) // 220 - i
         assertEquals(0.7f, pen.pressures[1])
+    }
+
+    /** Cuaderno con tapa: hojas declaradas fuera de orden, trazos STROKE y la imagen de tapa. */
+    private fun notebook(kind: Int = 1, pdf: ByteArray? = null): ByteArray {
+        val jzip = ByteArrayOutputStream()
+        DataOutputStream(jzip).use { out ->
+            out.writeUTF("TRY")
+            out.writeInt(2)
+            out.writeUTF("n2")
+            val bg = """{\"bgColor\":-198413,\"paperBg\":\"PageBg/Beige_Dotted_Paper\"}"""
+            record(out, "NOTE", "Cuaderno", """{"b":"Cuaderno","c":$kind,"i":"carpeta-1","p":"$bg"}""")
+            record(out, "PAGE", "h2", """{"a":"h2","c":1,"i":false,"d":"","k":1240.0,"l":1754.0,"p":""}""")
+            record(out, "PAGE", "tapa", """{"a":"tapa","c":0,"i":true,"d":"/Cover/1_2_-1_natural3","k":1240.0,"l":1754.0}""")
+            record(
+                out, "STROKE", "strokes",
+                """[{"b":0,"a":"h2","c":{"a":2,"c":-16777216,"d":3.0,"r":-3.1,"s":56.6,"t":0.0,"l":[],
+                     "k":[{"x":100,"y":200,"p":0.5},{"x":124,"y":200,"p":0.5}]},"e":238},
+                    {"b":1,"a":"tapa","c":{"a":2,"c":-16777216,"d":3.0,"k":[{"x":10,"y":20,"p":0.4}]},"e":239}]""",
+            )
+            record(out, "COVER", "1_2_-1_natural3_coverThumbnail.jpg", "chica")
+            record(out, "COVER", "1_2_-1_natural3.jpg", "tapa grande")
+            if (pdf != null) record(out, "PDF", "Jnotas n2.pdf", String(pdf, Charsets.ISO_8859_1))
+            out.writeInt(0)
+        }
+        return jzip.toByteArray()
+    }
+
+    @Test
+    fun parsesNotebookWithCover() {
+        val note = JnotesFile.parse(notebook())
+        assertEquals(JnotesFile.NOTEBOOK, note.kind)
+        assertEquals("carpeta-1", note.folder)
+        assertEquals("PageBg/Beige_Dotted_Paper", note.paper)
+        assertEquals(-198413, note.paperColor)
+        // La tapa ("c": 0) primero aunque venga después.
+        assertEquals("tapa grande", String(note.pages[0].cover!!))
+        assertNull(note.pages[1].cover)
+        // Puntos tal cual: r/s del pincel ya están aplicados.
+        assertEquals(100f, note.pages[1].strokes.single().xs[0])
+        assertEquals(200f, note.pages[1].strokes.single().ys[0])
+        assertEquals(10f, note.pages[0].strokes.single().xs[0])
+    }
+
+    @Test
+    fun importsNotebookAsA4Pages() {
+        val media = Files.createTempDirectory("medios").toFile()
+        val r = JnotesImporter.import(ByteArrayInputStream(notebook()), "id", "x", 2f, media, time = 1234L)
+        val n = r.note
+        assertEquals(PageSize.A4, n.pages.size)
+        assertEquals(2, n.pages.minPages)
+        assertEquals(Background.DOTS, n.background)
+        assertEquals(0xFFFCF8F3.toInt(), n.paperColor)
+        assertEquals(1234L, n.modified)
+        assertEquals("carpeta-1", r.folder)
+        assertTrue(r.pdfPages.isEmpty())
+        // La tapa, como imagen fija del tamaño de la primera hoja.
+        val cover = n.images.single()
+        assertTrue(cover.locked)
+        assertEquals(n.pages.width, cover.width, 0.5f)
+        assertEquals(n.pages.pageTop(0), cover.top, 0.01f)
+        // Un trazo de la segunda hoja: 150 ppp de Jnotes a 160 dp por pulgada.
+        val s = minOf(n.pages.width / 1240f, n.pages.height / 1754f)
+        val x0 = n.pages.left + (n.pages.width - 1240f * s) / 2
+        val b = n.strokes.map { it.left }.sorted()
+        assertEquals(x0 + 10f * s - 3f * s, b[0], 0.01f)
+        val second = n.strokes.first { it.top > n.pages.pageTop(1) - 10f }
+        assertEquals(x0 + 100f * s - 3f * s, second.left, 0.01f)
+        assertEquals(n.pages.pageTop(1) + 200f * s - 3f * s, second.top, 0.01f)
+        media.deleteRecursively()
+    }
+
+    @Test
+    fun copiesPdfOfPdfNote() {
+        val media = Files.createTempDirectory("medios").toFile()
+        val out = File(media, "nota.pdf")
+        val pdf = "%PDF-1.4 hojas".toByteArray()
+        val r = JnotesImporter.import(ByteArrayInputStream(notebook(kind = 3, pdf = pdf)), "id", "x", 2f, media, out)
+        assertEquals(pdf.toList(), out.readBytes().toList())
+        assertEquals(listOf(0, 1), r.pdfPages.map { it.index })
+        assertEquals(Background.BLANK, r.note.background)
+        assertEquals(r.note.pages.pageTop(1), r.pdfPages[1].top, 0.01f)
+        media.deleteRecursively()
+    }
+
+    @Test
+    fun pageSizesFromJnotes() {
+        assertEquals(PageLayout(PageSize.A4, false), JnotesImporter.layoutFor(1240f, 1754f))
+        assertEquals(PageLayout(PageSize.A4, true), JnotesImporter.layoutFor(1754f, 1240f))
+        assertEquals(PageLayout(PageSize.A3, true), JnotesImporter.layoutFor(2480f, 1754f))
+        assertEquals(PageLayout(PageSize.LETTER, false), JnotesImporter.layoutFor(1275f, 1650f))
+        val custom = JnotesImporter.layoutFor(1500f, 1125f)
+        assertEquals(PageSize.CUSTOM, custom.size)
+        assertEquals(254f, custom.customWidth, 0.01f)
+        assertEquals(190.5f, custom.customHeight, 0.01f)
+        assertEquals(Background.GRID, JnotesImporter.background("PageBg/White_Graph_Paper"))
+        assertEquals(Background.GRID_LARGE, JnotesImporter.background("PageBg/White_Wide_Grid_Paper"))
+        assertEquals(Background.LINES, JnotesImporter.background("PageBg/Beige_Law_Paper"))
+        assertEquals(Background.BLANK, JnotesImporter.background("/storage/emulated/0/x.jpg"))
+        assertNull(JnotesImporter.paperColor(-1))
     }
 
     @Test

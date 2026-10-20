@@ -84,6 +84,7 @@ class NoteStore private constructor(context: Context) {
         // Lo copiado o cortado con el lazo puede venir de esta nota y todavía no se pegó.
         keep.filter { it.parentFile == mediaDir(note.id) }.mapTo(used) { it.name }
         note.images.mapTo(used) { it.file.name }
+        used.add(Imports.ORIGINAL) // de donde salen las páginas de un PDF
         note.widgets.flatMapTo(used) { w -> w.files.map { it.name } }
         mediaDir(note.id).listFiles().orEmpty().filter { it.name !in used && !it.name.endsWith(".tmp") }.forEach { it.delete() }
     }

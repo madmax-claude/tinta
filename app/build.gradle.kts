@@ -32,6 +32,8 @@ android {
 // Test opcional contra una nota real: ./gradlew testDebugUnitTest -PjnotesSample=/ruta/a/nota.Jnotes
 tasks.withType<Test>().configureEach {
     systemProperty("jnotes.sample", providers.gradleProperty("jnotesSample").getOrElse(""))
+    // Y contra una carpeta entera de notas: -PjnotesDir=/ruta/a/la/carpeta
+    systemProperty("jnotes.dir", providers.gradleProperty("jnotesDir").getOrElse(""))
 }
 
 dependencies {
