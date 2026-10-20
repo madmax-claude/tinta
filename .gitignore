@@ -14,3 +14,9 @@ local.properties
 orden.json
 carpetas.json
 __pycache__/
+
+# Claves de firma y paquetes para Play.
+*.jks
+*.keystore
+*.aab
+subida.properties

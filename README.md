@@ -39,6 +39,11 @@ Jnotes guarda una copia de cada nota en
 sus fechas; Tinta la importa de una vez (ver la documentación del script y de `JnotesBatch`).
 Para una sola nota alcanza con abrir o compartir el `.Jnotes` con Tinta.
 
+## Privacidad
+
+Tinta no tiene cuentas ni servidores: las notas quedan en la tablet. Detalle en
+[PRIVACIDAD.md](PRIVACIDAD.md).
+
 ## Licencia
 
 Copyright (C) 2026 Octavio

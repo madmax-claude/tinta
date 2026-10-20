@@ -1,0 +1,29 @@
+Tinta es una app para escribir a mano con el lápiz de la tablet, pensada para tomar apuntes y estudiar. Es gratuita, sin publicidad y sin cuentas: tus notas quedan en la tablet.
+
+CUADERNOS Y LIENZO INFINITO
+• Hojas A4, A5, A3, B5, Carta u Oficio, o un lienzo sin bordes.
+• Fondos de cuadrícula, rayado, puntos, milimetrado, pentagrama u hoja de errores, y color de hoja.
+
+ESCRIBIR Y DIBUJAR
+• Pluma sensible a la presión, marcador y resaltador, con líneas a rayas o de puntos.
+• Borrador por trazo o parcial.
+• Lazo para mover, escalar, girar y copiar.
+• Figuras: dejá el lápiz quieto al terminar un trazo y se convierte en recta, círculo o polígono.
+
+MÁS QUE TINTA
+• Imágenes, notas de voz y videos dentro de la nota.
+• PDF para escribir encima.
+• Gráficos de funciones en 2D y 3D, y cuerpos 3D.
+
+ORDEN
+• Búsqueda en lo escrito a mano.
+• Carpetas dentro de carpetas: mové notas y carpetas arrastrándolas.
+• Pestañas y dos notas en pantalla dividida.
+• Modo oscuro y pantalla completa.
+
+TUS NOTAS SON TUYAS
+• Exportá a PDF, imágenes o texto.
+• Copia automática de todas las notas en Google Drive o donde elijas.
+• Importá tus notas de Jnotes: cuadernos, PDF anotados y lienzos infinitos.
+
+Tinta es software libre (licencia GPL v3). Código fuente: https://github.com/madmax-claude/tinta

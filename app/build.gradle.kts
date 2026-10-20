@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
@@ -14,15 +16,30 @@ android {
         versionName = "0.1"
     }
 
+    // Clave de subida a Google Play: fuera del repositorio, en ~/tinta-claves/subida.properties
+    // (storeFile, storePassword, keyAlias, keyPassword). Play vuelve a firmar la app con su propia
+    // clave antes de distribuirla. Sin ese archivo, la release se firma con la de depuración.
+    val uploadFile = File(System.getProperty("user.home"), "tinta-claves/subida.properties")
+    val upload: Properties? = if (!uploadFile.isFile) null else
+        Properties().also { p -> uploadFile.inputStream().use { p.load(it) } }
+    signingConfigs {
+        if (upload != null) {
+            create("subida") {
+                storeFile = file(upload.getProperty("storeFile"))
+                storePassword = upload.getProperty("storePassword")
+                keyAlias = upload.getProperty("keyAlias")
+                keyPassword = upload.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // Sin R8: achicando, borraba clases que se buscan por reflexión (WorkDatabase de
             // WorkManager, que trae ML Kit) y la app se cerraba al abrir. Así es el mismo código
             // que la versión de depuración, que es la que se prueba.
             isMinifyEnabled = false
-            // Se firma con la clave de depuración de la PC: las actualizaciones tienen que venir
-            // firmadas con la misma (~/.android/debug.keystore).
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (upload != null) "subida" else "debug")
         }
     }
 
