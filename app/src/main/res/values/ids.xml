@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tags de FolderDrag: a qué carpeta lleva una vista al soltar algo encima. -->
+    <item name="drag_target" type="id" />
+    <item name="drag_area" type="id" />
+</resources>

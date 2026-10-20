@@ -41,6 +41,7 @@ import com.octavio.tinta.storage.JnotesBatch
 import com.octavio.tinta.storage.Library
 import com.octavio.tinta.storage.NoteStore
 import com.octavio.tinta.ui.Chrome
+import com.octavio.tinta.ui.FolderDrag
 import com.octavio.tinta.ui.Popups
 import java.io.File
 import java.util.concurrent.Executors
@@ -51,6 +52,13 @@ class MainActivity : TintaActivity() {
     private lateinit var prefs: Prefs
     private lateinit var emptyView: TextView
     private lateinit var foldersBox: LinearLayout
+
+    /** Arrastrar notas y carpetas hasta otra carpeta (mantener apretada y mover). */
+    private val drag = FolderDrag(
+        canDrop = { item, target -> canDrop(item, target) },
+        onDrop = { item, target -> dropInto(item, target) },
+        onHoverOpen = { open(it) },
+    )
     private lateinit var folderTitle: TextView
     private val adapter = NotesAdapter()
     private val thumbs = LruCache<String, Bitmap>(64)
@@ -115,6 +123,9 @@ class MainActivity : TintaActivity() {
             }
         }
         list.adapter = adapter
+        // Soltar en un lugar vacío de la lista: a la carpeta que se está viendo.
+        drag.area(list) { if (query.isEmpty()) targetFolder() else null }
+        drag.area(foldersBox.parent as View) { null }
         folderTitle.movementMethod = android.text.method.LinkMovementMethod.getInstance()
 
         findViewById<View>(R.id.new_note).setOnClickListener { newNote() }
@@ -402,20 +413,22 @@ class MainActivity : TintaActivity() {
         }
 
         foldersBox.removeAllViews()
-        addFolderRow(getString(R.string.all_notes), R.drawable.ic_notes, notes.size, folder == null, depth = 0) { open(null) }
+        addFolderRow(getString(R.string.all_notes), R.drawable.ic_notes, notes.size, folder == null, depth = 0, drop = Drop(null)) { open(null) }
         // El árbol: las de arriba de todo, y abiertas las que llevan a la carpeta que se ve.
         val openPath = folder?.takeIf { it != NO_FOLDER }?.let { id -> lib.path(id).map { it.id }.toSet() }.orEmpty()
         fun tree(parent: String?, depth: Int) {
             for (f in lib.children(parent)) {
                 val inside = lib.subtree(f.id)
                 val count = notes.count { it.folder in inside }
-                addFolderRow(f.name, R.drawable.ic_folder, count, folder == f.id, depth = depth, onMenu = { folderMenu(it, f) }) { open(f.id) }
+                addFolderRow(f.name, R.drawable.ic_folder, count, folder == f.id, depth = depth, onMenu = { folderMenu(it, f) }, drop = Drop(f.id)) {
+                    open(f.id)
+                }
                 if (f.id in openPath) tree(f.id, depth + 1)
             }
         }
         tree(null, 0)
         if (folders.isNotEmpty()) {
-            addFolderRow(getString(R.string.no_folder), R.drawable.ic_folder, notes.count { it.folder == null }, folder == NO_FOLDER, depth = 0) {
+            addFolderRow(getString(R.string.no_folder), R.drawable.ic_folder, notes.count { it.folder == null }, folder == NO_FOLDER, depth = 0, drop = Drop(null)) {
                 open(NO_FOLDER)
             }
         }
@@ -512,7 +525,14 @@ class MainActivity : TintaActivity() {
         )
     }
 
-    /** Una fila de la barra lateral; con `onMenu`, lleva un botón ⋮ (y mantenerla apretada hace lo mismo). */
+    /** Destino de arrastre de una fila de la barra: la carpeta a la que lleva (null: fuera de las carpetas). */
+    private class Drop(val folder: String?)
+
+    /**
+     * Una fila de la barra lateral; con `onMenu`, lleva un botón ⋮. Con `drop`, se le pueden soltar
+     * notas y carpetas encima; si además es una carpeta (`onMenu` y `drop.folder`), mantenerla
+     * apretada la levanta para arrastrarla (soltarla sin mover abre el menú).
+     */
     private fun addFolderRow(
         name: String,
         icon: Int,
@@ -520,6 +540,7 @@ class MainActivity : TintaActivity() {
         selected: Boolean,
         depth: Int,
         onMenu: ((View) -> Unit)? = null,
+        drop: Drop? = null,
         onClick: () -> Unit,
     ) {
         val row = TextView(this, null, 0, R.style.SidebarItem).apply {
@@ -531,6 +552,7 @@ class MainActivity : TintaActivity() {
             setOnClickListener { onClick() }
         }
         if (onMenu == null) {
+            if (drop != null) drag.target(row, drop.folder, open = false, radiusDp = 10f)
             foldersBox.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44f).toInt()))
             return
         }
@@ -542,15 +564,17 @@ class MainActivity : TintaActivity() {
             tip(contentDescription)
             setOnClickListener { onMenu(it) }
         }
-        row.setOnLongClickListener {
-            onMenu(more)
-            true
-        }
         val line = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(row, LinearLayout.LayoutParams(0, dp(44f).toInt(), 1f))
             addView(more, LinearLayout.LayoutParams(dp(36f).toInt(), dp(44f).toInt()))
         }
+        val id = drop?.folder
+        row.setOnLongClickListener {
+            if (id != null) drag.start(line, FolderDrag.Item.Folder(id), 1f) { onMenu(more) } else onMenu(more)
+            true
+        }
+        if (drop != null) drag.target(line, id, radiusDp = 10f)
         foldersBox.addView(line, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44f).toInt()))
     }
 
@@ -679,6 +703,36 @@ class MainActivity : TintaActivity() {
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    /** Si se puede soltar `item` en `target` (null: fuera de las carpetas): no donde ya está, ni una carpeta dentro de sí misma. */
+    private fun canDrop(item: FolderDrag.Item, target: String?): Boolean {
+        val lib = store.library
+        return when (item) {
+            is FolderDrag.Item.Note -> lib.folderOf(item.id) != target
+            is FolderDrag.Item.Folder -> target !in lib.subtree(item.id) && lib.parentOf(item.id) != target
+        }
+    }
+
+    private fun dropInto(item: FolderDrag.Item, target: String?) {
+        val lib = store.library
+        val where = lib.folder(target)?.name?.let { "a «$it»" }
+        when (item) {
+            is FolderDrag.Item.Note -> {
+                hint("Nota movida " + (where ?: "afuera de las carpetas"))
+                store.io.execute {
+                    lib.move(item.id, target)
+                    refresh()
+                }
+            }
+            is FolderDrag.Item.Folder -> {
+                hint("Carpeta movida " + (where ?: "arriba de todo"))
+                store.io.execute {
+                    lib.moveFolder(item.id, target)
+                    refresh()
+                }
+            }
+        }
     }
 
     /** La carpeta donde van las notas nuevas o importadas: la abierta, si es una carpeta. */
@@ -948,8 +1002,13 @@ class MainActivity : TintaActivity() {
                     if (query.isNotEmpty()) lib.parentOf(f.id)?.let(::pathName) else null,
                 ).joinToString(" · ")
                 itemView.setOnClickListener { open(f.id) }
-                itemView.setOnLongClickListener { folderMenu(more, f); true }
+                itemView.setOnLongClickListener {
+                    drag.start(itemView, FolderDrag.Item.Folder(f.id), 0.9f) { folderMenu(more, f) }
+                    true
+                }
                 more.setOnClickListener { folderMenu(it, f) }
+                drag.target(itemView, f.id)
+                itemView.alpha = 1f
             }
         }
 
@@ -969,7 +1028,12 @@ class MainActivity : TintaActivity() {
                 val where = if (folder == null) pathName(info.folder) else null
                 meta.text = snippets[info.id] ?: listOfNotNull(ago, "${info.strokeCount} trazos", where).joinToString(" · ")
                 itemView.setOnClickListener { openNote(info.id) }
-                itemView.setOnLongClickListener { showMenu(more, info); true }
+                // Mantener apretada la levanta para llevarla a una carpeta; sin moverla, el menú.
+                itemView.setOnLongClickListener {
+                    drag.start(itemView, FolderDrag.Item.Note(info.id), 0.55f) { showMenu(more, info) }
+                    true
+                }
+                itemView.alpha = 1f
                 more.setOnClickListener { showMenu(it, info) }
 
                 val key = "${info.id}@${info.modified}"
