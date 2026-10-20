@@ -16,9 +16,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            // App personal: se firma con la clave de depuración para instalarla por adb.
+            // Sin R8: achicando, borraba clases que se buscan por reflexión (WorkDatabase de
+            // WorkManager, que trae ML Kit) y la app se cerraba al abrir. Así es el mismo código
+            // que la versión de depuración, que es la que se prueba.
+            isMinifyEnabled = false
+            // Se firma con la clave de depuración de la PC: las actualizaciones tienen que venir
+            // firmadas con la misma (~/.android/debug.keystore).
             signingConfig = signingConfigs.getByName("debug")
         }
     }
