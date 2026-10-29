@@ -22,9 +22,10 @@ enum class PageSize(val id: Int, val label: String, val widthMm: Float, val heig
 }
 
 /**
- * Cómo se reparten las hojas en el mundo: una debajo de la otra, separadas [GAP], con la primera
- * en (left, top). El mundo está en dp, que en la P12 es tamaño real (160 por pulgada), así que una
- * A4 a zoom 1 mide lo mismo que en papel. En una nota infinita no hay hojas.
+ * Cómo se reparten las hojas en el mundo. Con [horizontal] en false van una debajo de la otra; en
+ * true, una al lado de la otra, como un cuaderno. Separadas [GAP], con la primera en (left, top).
+ * El mundo está en dp, que en la P12 es tamaño real (160 por pulgada), así que una A4 a zoom 1 mide
+ * lo mismo que en papel. En una nota infinita no hay hojas.
  */
 data class PageLayout(
     val size: PageSize = PageSize.INFINITE,
@@ -36,6 +37,8 @@ data class PageLayout(
     val customHeight: Float = 0f,
     /** Hojas que se agregaron a mano: hay al menos estas aunque estén en blanco. */
     val minPages: Int = 0,
+    /** Hojas de costado, como un cuaderno. Si no, una debajo de la otra. */
+    val horizontal: Boolean = false,
 ) {
     val paged get() = size != PageSize.INFINITE
     private val baseWidth get() = if (size == PageSize.CUSTOM) customWidth else size.widthMm
@@ -44,24 +47,41 @@ data class PageLayout(
     val height get() = mm(if (landscape) baseWidth else baseHeight)
     val right get() = left + width
 
-    /** De una hoja a la siguiente. */
-    val step get() = height + GAP
+    /** De una hoja a la siguiente, sobre el eje en que se apilan. */
+    val step get() = (if (horizontal) width else height) + GAP
 
-    fun pageTop(k: Int) = top + k * step
+    private val origin get() = if (horizontal) left else top
 
-    /** La hoja en la altura `y`, o la de arriba si cae en el espacio entre dos; puede ser negativa. */
-    fun pageAt(y: Float): Int = floor((y - top) / step).toInt()
+    /** Dónde empieza la hoja `k` sobre ese eje. */
+    fun pageStart(k: Int) = origin + k * step
+
+    fun pageLeft(k: Int) = if (horizontal) pageStart(k) else left
+
+    fun pageTop(k: Int) = if (horizontal) top else pageStart(k)
 
     /**
-     * Cuántas hojas mostrar con lo escrito hasta `contentBottom` (NaN si no hay nada): hasta la
-     * última usada, más una en blanco para seguir escribiendo, y al menos las agregadas a mano.
+     * La hoja en la coordenada `along` del eje (x si es un cuaderno, y si no). El hueco entre dos
+     * cuenta para la de antes. Puede ser negativa.
      */
-    fun count(contentBottom: Float): Int =
-        max(minPages, if (contentBottom.isNaN()) 1 else max(1, pageAt(contentBottom) + 2))
+    fun pageAt(along: Float): Int = floor((along - origin) / step).toInt()
+
+    /** La hoja que contiene el punto. */
+    fun pageOf(x: Float, y: Float) = pageAt(if (horizontal) x else y)
+
+    /** Borde lejano del contenido: el de la derecha en el cuaderno, el de abajo si no. */
+    fun endOf(right: Float, bottom: Float) = if (horizontal) right else bottom
+
+    /**
+     * Cuántas hojas mostrar con lo escrito hasta `contentEnd` (NaN si no hay nada): hasta la
+     * última usada, más una en blanco para seguir escribiendo, y al menos las agregadas a mano.
+     * `contentEnd` es el borde lejano sobre el eje de las hojas.
+     */
+    fun count(contentEnd: Float): Int =
+        max(minPages, if (contentEnd.isNaN()) 1 else max(1, pageAt(contentEnd) + 2))
 
     /** Hojas para exportar: hasta la última escrita (al menos una) y las agregadas a mano. */
-    fun used(contentBottom: Float): Int =
-        max(minPages, if (contentBottom.isNaN()) 1 else max(1, pageAt(contentBottom) + 1))
+    fun used(contentEnd: Float): Int =
+        max(minPages, if (contentEnd.isNaN()) 1 else max(1, pageAt(contentEnd) + 1))
 
     companion object {
         const val GAP = 32f

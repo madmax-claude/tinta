@@ -8,6 +8,8 @@ import android.graphics.Path
 import android.graphics.RectF
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Expr
+import com.octavio.tinta.model.Figure2D
+import com.octavio.tinta.model.FigureKind
 import com.octavio.tinta.model.Graph2D
 import com.octavio.tinta.model.Graph3D
 import com.octavio.tinta.model.Media
@@ -21,14 +23,16 @@ import com.octavio.tinta.model.Widget
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sin
 
 /**
- * Dibuja los widgets en coordenadas del mundo: gráficos, figuras 3D y las tarjetas de los audios y
+ * Dibuja los widgets en coordenadas del mundo: gráficos, figuras 2D y 3D y las tarjetas de los audios y
  * videos. Igual en pantalla, en las vistas previas y en el PDF; cada hilo tiene su instancia.
  */
 class WidgetPainter {
@@ -49,6 +53,7 @@ class WidgetPainter {
             is Graph2D -> graph2d(canvas, w, dark)
             is Graph3D -> graph3d(canvas, w, dark)
             is Solid -> solid(canvas, w, dark)
+            is Figure2D -> figure(canvas, w, dark)
             is Media -> media(canvas, w, dark, w.thumb?.let(thumb))
         }
     }
@@ -269,6 +274,90 @@ class WidgetPainter {
         val f = t.coerceIn(0f, 1f)
         fun ch(shift: Int) = (((a shr shift) and 0xFF) * (1 - f) + ((b shr shift) and 0xFF) * f).toInt() shl shift
         return 0xFF000000.toInt() or ch(16) or ch(8) or ch(0)
+    }
+
+    // --- Figuras planas ---
+
+    private fun figure(canvas: Canvas, f: Figure2D, dark: Boolean) {
+        path.rewind()
+        figurePath(f)
+        val color = ink(f.color, dark)
+        if (f.filled) {
+            fill.color = color and 0x00FFFFFF or 0x33000000
+            canvas.drawPath(path, fill)
+        }
+        line.color = color
+        line.strokeWidth = max(min(f.width, f.height) * 0.012f, 1.2f)
+        line.pathEffect = null
+        line.style = Paint.Style.STROKE
+        canvas.drawPath(path, line)
+    }
+
+    private fun figurePath(f: Figure2D) {
+        val side = min(f.width, f.height)
+        val square = RectF(f.centerX - side / 2, f.centerY - side / 2, f.centerX + side / 2, f.centerY + side / 2)
+        val box = RectF(f.left, f.top, f.right, f.bottom)
+        when (f.kind) {
+            FigureKind.SQUARE -> path.addRect(square, Path.Direction.CW)
+            FigureKind.RECT -> path.addRect(box, Path.Direction.CW)
+            FigureKind.CIRCLE -> path.addOval(square, Path.Direction.CW)
+            FigureKind.ELLIPSE -> path.addOval(box, Path.Direction.CW)
+            FigureKind.TRIANGLE -> {
+                path.moveTo(f.left, f.bottom)
+                path.lineTo(f.centerX, f.top)
+                path.lineTo(f.right, f.bottom)
+                path.close()
+            }
+            FigureKind.RIGHT -> {
+                path.moveTo(f.left, f.top)
+                path.lineTo(f.left, f.bottom)
+                path.lineTo(f.right, f.bottom)
+                path.close()
+            }
+            FigureKind.DIAMOND -> polygon(f, 4, Math.PI / 2)
+            FigureKind.TRAPEZOID -> {
+                val inset = f.width * 0.18f
+                path.moveTo(f.left + inset, f.top)
+                path.lineTo(f.right - inset, f.top)
+                path.lineTo(f.right, f.bottom)
+                path.lineTo(f.left, f.bottom)
+                path.close()
+            }
+            FigureKind.PARALLELOGRAM -> {
+                val skew = f.width * 0.22f
+                path.moveTo(f.left + skew, f.top)
+                path.lineTo(f.right, f.top)
+                path.lineTo(f.right - skew, f.bottom)
+                path.lineTo(f.left, f.bottom)
+                path.close()
+            }
+            FigureKind.PENTAGON -> polygon(f, 5, -Math.PI / 2)
+            FigureKind.HEXAGON -> polygon(f, 6, 0.0)
+            FigureKind.ARROW -> {
+                val head = f.left + f.width * 0.62f
+                path.moveTo(f.left, f.top + f.height * 0.32f)
+                path.lineTo(head, f.top + f.height * 0.32f)
+                path.lineTo(head, f.top + f.height * 0.1f)
+                path.lineTo(f.right, f.centerY)
+                path.lineTo(head, f.top + f.height * 0.9f)
+                path.lineTo(head, f.top + f.height * 0.68f)
+                path.lineTo(f.left, f.top + f.height * 0.68f)
+                path.close()
+            }
+        }
+    }
+
+    /** Polígono regular inscripto en el rectángulo, con el primer vértice en el ángulo `start`. */
+    private fun polygon(f: Figure2D, n: Int, start: Double) {
+        val rx = f.width / 2
+        val ry = f.height / 2
+        for (k in 0 until n) {
+            val a = start + 2 * Math.PI * k / n
+            val x = f.centerX + rx * cos(a).toFloat()
+            val y = f.centerY + ry * sin(a).toFloat()
+            if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.close()
     }
 
     // --- Figuras 3D ---

@@ -49,6 +49,8 @@ import com.octavio.tinta.model.MediaKind
 import com.octavio.tinta.model.MeshBuilder
 import com.octavio.tinta.model.Note
 import com.octavio.tinta.model.NoteImage
+import com.octavio.tinta.model.Figure2D
+import com.octavio.tinta.model.FigureKind
 import com.octavio.tinta.model.PageLayout
 import com.octavio.tinta.model.PageSize
 import com.octavio.tinta.model.Pen
@@ -694,7 +696,7 @@ class EditorActivity :
         hits.sortBy { it.second.errors }
         searchHits = hits.map { it.first }
         searchPanel.setResults(hits.map { (line, m) ->
-            SearchPanel.Result(if (n.pages.paged) "Hoja ${n.pages.pageAt((line.top + line.bottom) / 2).coerceAtLeast(0) + 1}" else "", m.text)
+            SearchPanel.Result(if (n.pages.paged) "Hoja ${n.pages.pageOf((line.left + line.right) / 2, (line.top + line.bottom) / 2).coerceAtLeast(0) + 1}" else "", m.text)
         })
         searchPanel.setStatus(
             (if (hits.isEmpty()) "No aparece «$shown»." else "Aparece en ${count(hits.size, "renglón", "renglones")}.") +
@@ -1269,7 +1271,10 @@ class EditorActivity :
             }
             ToolDock.Tool.SOLID -> {
                 val start = Solid(0f, 0f, 0f, 0f, SolidKind.CUBE, 1f, 1f, 1f, 30f, 20f, widgetColor(), hiddenEdges = true, shaded = true)
-                WidgetEditors.solid(this, start, isDark, isNew = true) { insertWidget(it, 380f, 380f) }
+                WidgetEditors.solid(this, start, isDark, isNew = true) { w ->
+                    val (ww, hh) = if (w is Figure2D) figureSize(w) else 380f to 380f
+                    insertWidget(w, ww, hh)
+                }
             }
             ToolDock.Tool.AUDIO -> {
                 if (recorder.recording) {
@@ -1349,7 +1354,12 @@ class EditorActivity :
         }
         Popups.pages(
             this, anchor, k, canvas.pageCount,
+            horizontal = canvas.pages.horizontal,
             stripShown = !pageStrip.collapsed,
+            onDirection = { horizontal ->
+                loading.visibility = View.VISIBLE
+                canvas.setDirection(horizontal) { loading.visibility = View.GONE }
+            },
             onToggleStrip = {
                 pageStrip.setCollapsed(!pageStrip.collapsed)
                 prefs.pageStripCollapsed = pageStrip.collapsed
@@ -1360,6 +1370,14 @@ class EditorActivity :
                 confirm(getString(R.string.delete_page, k + 1), getString(R.string.delete)) { shift(k, delete = true) }
             },
         )
+    }
+
+    /** Tamaño de una figura plana al insertarla, en dp de pantalla. */
+    private fun figureSize(f: Figure2D) = when (f.kind) {
+        FigureKind.SQUARE, FigureKind.CIRCLE, FigureKind.PENTAGON, FigureKind.HEXAGON,
+        FigureKind.DIAMOND, FigureKind.TRIANGLE,
+        -> 340f to 340f
+        else -> 420f to 280f
     }
 
     /** Los gráficos y figuras nuevos salen del color del lápiz elegido (si no es un resaltador). */
@@ -1478,7 +1496,7 @@ class EditorActivity :
             when (w) {
                 is Graph2D -> WidgetEditors.graph2d(this, w, isDark, isNew = false, onDone = ::replace)
                 is Graph3D -> WidgetEditors.graph3d(this, w, isDark, isNew = false, onDone = ::replace)
-                is Solid -> WidgetEditors.solid(this, w, isDark, isNew = false, onDone = ::replace)
+                is Solid, is Figure2D -> WidgetEditors.solid(this, w, isDark, isNew = false, onDone = ::replace)
                 is Media -> play(w)
             }
             return

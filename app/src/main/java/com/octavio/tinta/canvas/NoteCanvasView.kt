@@ -42,6 +42,7 @@ import com.octavio.tinta.model.Cut
 import com.octavio.tinta.model.Dash
 import com.octavio.tinta.model.History
 import com.octavio.tinta.model.InkStroke
+import com.octavio.tinta.model.Figure2D
 import com.octavio.tinta.model.Graph2D
 import com.octavio.tinta.model.Graph3D
 import com.octavio.tinta.model.Lasso
@@ -336,16 +337,24 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private fun fitToWindow() {
         if (!pages.paged || width == 0) return
         val pageWidth = pages.width * camera.scale
-        val left = pages.left * camera.scale + camera.tx
+        val anchor = sheetLeft(width / 2f, height / 2f)
+        val left = anchor * camera.scale + camera.tx
         if (pageWidth <= width) {
-            if (abs(left - (width - pageWidth) / 2) > 1f) camera.set((width - pageWidth) / 2 - pages.left * camera.scale, camera.ty, camera.zoom)
+            if (abs(left - (width - pageWidth) / 2) > 1f) camera.set((width - pageWidth) / 2 - anchor * camera.scale, camera.ty, camera.zoom)
         } else if (pageWidth <= resources.displayMetrics.widthPixels * 1.02f) {
             val top = camera.toWorldY(0f)
             val zoom = (width - 24 * density) / (pages.width * density)
             val scale = zoom.coerceIn(Camera.MIN_ZOOM, Camera.MAX_ZOOM) * density
-            camera.set((width - pages.width * scale) / 2 - pages.left * scale, -top * scale, zoom)
+            camera.set((width - pages.width * scale) / 2 - anchor * scale, -top * scale, zoom)
         }
         dry.invalidate()
+    }
+
+    /** Borde izquierdo de la hoja que se está mirando. En vertical todas comparten el mismo. */
+    private fun sheetLeft(screenX: Float, screenY: Float): Float {
+        if (!pages.horizontal) return pages.left
+        val k = pages.pageOf(camera.toWorldX(screenX), camera.toWorldY(screenY)).coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+        return pages.pageLeft(k)
     }
 
     /**
@@ -361,10 +370,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (oldw == 0 || oldh == 0) return
         val wasPageWidth = pages.paged && abs(pages.width * camera.scale + 24 * density - oldw) < 0.02f * oldw
         if (wasPageWidth) {
+            val anchor = sheetLeft(oldw / 2f, oldh / 2f)
             val centerY = camera.toWorldY(oldh / 2f)
             val zoom = (w - 24 * density) / (pages.width * density)
             val scale = zoom.coerceIn(Camera.MIN_ZOOM, Camera.MAX_ZOOM) * density
-            camera.set((w - pages.width * scale) / 2 - pages.left * scale, h / 2f - centerY * scale, zoom)
+            camera.set((w - pages.width * scale) / 2 - anchor * scale, h / 2f - centerY * scale, zoom)
         } else {
             camera.set(camera.tx + (w - oldw) / 2f, camera.ty + (h - oldh) / 2f, camera.zoom)
         }
@@ -425,22 +435,23 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private fun fitPage() {
         val pad = 12 * density
+        val centerX = camera.toWorldX(width / 2f)
         val centerY = camera.toWorldY(height / 2f)
-        val k = pages.pageAt(centerY).coerceIn(0, pageCount - 1)
+        val k = pages.pageOf(centerX, centerY).coerceIn(0, pageCount - 1)
         val widthZoom = (width - 2 * pad) / (pages.width * density)
         val pageZoom = min(widthZoom, (height - 2 * pad) / (pages.height * density))
         if (abs(camera.zoom / widthZoom - 1) > 0.02f || widthZoom <= pageZoom * 1.02f) {
             // Al ancho, sin mover lo que está en el medio de la pantalla.
             val scale = widthZoom.coerceIn(Camera.MIN_ZOOM, Camera.MAX_ZOOM) * density
             val empty = strokes.isEmpty() && images.isEmpty() && texts.isEmpty() && widgets.isEmpty()
-            val y = if (empty || pages.pageAt(camera.toWorldY(0f)) < 0) pages.top - pad / scale else centerY - height / 2f / scale
-            camera.set((width - pages.width * scale) / 2 - pages.left * scale, -y * scale, widthZoom)
+            val above = camera.toWorldY(0f) < pages.top
+            val y = if (empty || above) pages.top - pad / scale else centerY - height / 2f / scale
+            camera.set((width - pages.width * scale) / 2 - pages.pageLeft(k) * scale, -y * scale, widthZoom)
         } else {
             val scale = pageZoom * density
-            val top = pages.pageTop(k)
             camera.set(
-                (width - pages.width * scale) / 2 - pages.left * scale,
-                (height - pages.height * scale) / 2 - top * scale,
+                (width - pages.width * scale) / 2 - pages.pageLeft(k) * scale,
+                (height - pages.height * scale) / 2 - pages.pageTop(k) * scale,
                 pageZoom,
             )
         }
@@ -655,6 +666,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 // Un solo dedo que no se mueve es un toque (por ejemplo, para reproducir un audio).
                 removeCallbacks(fingerHold)
                 if (fingers.size == 1) {
+                    // Un dedo corta el pase de hoja: si no, la animación y el arrastre pelean la cámara.
+                    cancelFlipAnim()
                     tapPointer = id
                     tapX = e.getX(i)
                     tapY = e.getY(i)
@@ -663,6 +676,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                     if (mode == Mode.LASSO || mode == Mode.CAPTURE) postDelayed(fingerHold, LONG_PRESS_MS)
                 } else {
                     tapPointer = NONE
+                    if (fingers.size == 2 && pages.paged) beginFlip()
                 }
             }
             return
@@ -670,6 +684,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (penPointer != NONE) return
         removeCallbacks(merge)
         fingers.clear() // el lápiz manda: corta cualquier desplazamiento en curso
+        flip = null
+        suppressPan = false
+        cancelFlipAnim()
         removeCallbacks(fingerHold)
         tapPointer = NONE
         penPointer = id
@@ -693,7 +710,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             return
         }
         penDownAt = e.eventTime
-        startWritingClip(inY(e.getY(i)))
+        startWritingClip(inX(e.getX(i)), inY(e.getY(i)))
         startHold(e, i)
         if (pen.straight) {
             lineStart = PointF(inX(e.getX(i)), inY(e.getY(i)))
@@ -804,8 +821,17 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 val still = hypot(e.getX(i) - tapX, e.getY(i) - tapY) < TAP_SLOP * density
                 if (still && e.eventTime - tapAt < TAP_MS) mediaAt(camera.toWorldX(e.getX(i)), camera.toWorldY(e.getY(i)))?.let { listener?.onMediaTap(it) }
             }
-            // Al soltar los dedos se repinta lo que quedó estirado por el zoom.
-            if (fingers.remove(id) != null && fingers.isEmpty()) dry.invalidate()
+            val turning = flip != null && fingers.size >= 2
+            fingers.remove(id)
+            if (turning && fingers.size < 2) {
+                val locked = flip?.decided == true && flip?.pinch != true
+                finishFlip()
+                if (locked && fingers.isNotEmpty()) suppressPan = true
+            }
+            if (fingers.isEmpty()) {
+                suppressPan = false
+                dry.invalidate()
+            }
             return
         }
         lastPenSeen = e.eventTime
@@ -887,6 +913,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penPointer = NONE
         penStroke = null
         fingers.clear()
+        flip = null
+        suppressPan = false
+        cancelFlipAnim()
         dry.invalidate()
         scheduleMerge()
     }
@@ -913,16 +942,31 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         nx /= n
         ny /= n
         var factor = 1f
+        var span = 0f
         if (n >= 2) {
             var oldSpan = 0f
-            var newSpan = 0f
             for ((id, p) in fingers) {
                 val i = e.findPointerIndex(id)
                 if (i < 0) continue
                 oldSpan += hypot(p.x - ox, p.y - oy)
-                newSpan += hypot(e.getX(i) - nx, e.getY(i) - ny)
+                span += hypot(e.getX(i) - nx, e.getY(i) - ny)
             }
-            if (oldSpan > 1f) factor = newSpan / oldSpan
+            if (oldSpan > 1f) factor = span / oldSpan
+        }
+        if (n >= 2 && trackFlip(n, nx, ny, span)) {
+            for ((id, p) in fingers) {
+                val i = e.findPointerIndex(id)
+                if (i >= 0) p.set(e.getX(i), e.getY(i))
+            }
+            dry.invalidate()
+            return
+        }
+        if (suppressPan) {
+            for ((id, p) in fingers) {
+                val i = e.findPointerIndex(id)
+                if (i >= 0) p.set(e.getX(i), e.getY(i))
+            }
+            return
         }
         if (tapPointer != NONE) {
             val i = e.findPointerIndex(tapPointer)
@@ -1105,16 +1149,20 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
      */
     private var writingClip: RectF? = null
 
-    private fun pageRect(k: Int) = RectF(pages.left, pages.pageTop(k), pages.right, pages.pageTop(k) + pages.height)
+    private fun pageRect(k: Int): RectF {
+        val l = pages.pageLeft(k)
+        val t = pages.pageTop(k)
+        return RectF(l, t, l + pages.width, t + pages.height)
+    }
 
-    private fun pageForWriting(y: Float) = pageRect(pages.pageAt(y).coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
+    private fun pageForWriting(x: Float, y: Float) = pageRect(pages.pageOf(x, y).coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
 
-    private fun startWritingClip(worldY: Float) {
+    private fun startWritingClip(worldX: Float, worldY: Float) {
         if (!pages.paged) {
             endWritingClip()
             return
         }
-        val r = pageForWriting(worldY)
+        val r = pageForWriting(worldX, worldY)
         writingClip = r
         // El trazo en curso lo dibuja la capa de Ink, en la pantalla (o en el panel de la lupa).
         wet.clipBounds = android.graphics.Rect(
@@ -1135,7 +1183,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (inputs.size == 0) return listOf(s)
         val p = StrokeInput()
         inputs.populate(0, p)
-        val page = pageForWriting(p.y)
+        val page = pageForWriting(p.x, p.y)
         // La tinta entera adentro: queda como está (casi siempre).
         if (s.left >= page.left && s.right <= page.right && s.top >= page.top && s.bottom <= page.bottom) return listOf(s)
         // Medio grosor adentro del borde, para que la tinta no se asome fuera de la hoja.
@@ -1575,6 +1623,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 is Graph2D -> w.copy(color = color)
                 is Graph3D -> w.copy(color = color)
                 is Solid -> w.copy(color = color)
+                is Figure2D -> w.copy(color = color)
                 is Media -> w
             }
         }
@@ -1933,13 +1982,181 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         return History.removeAt(list, list.indices.filter { list[it] in chosen })
     }
 
+    // --- Pasar de hoja con dos dedos ---
+
+    /** Gesto de dos dedos que puede terminar en un pase de hoja. */
+    private class Flip(
+        val page: Int,
+        val tx: Float,
+        val ty: Float,
+        val zoom: Float,
+        val x0: Float,
+        val y0: Float,
+        val span0: Float,
+        var along: Float = 0f,
+        var decided: Boolean = false,
+        var pinch: Boolean = false,
+        var lastNs: Long = System.nanoTime(),
+        var velocity: Float = 0f,
+    )
+
+    private class FlipAnim(val x0: Float, val y0: Float, val x1: Float, val y1: Float, val t0: Long)
+
+    private var flip: Flip? = null
+    private var flipAnim: FlipAnim? = null
+
+    /** Quedó un dedo después de pasar la hoja: no arrastra la vista hasta que se levanta. */
+    private var suppressPan = false
+
+    private val flipShade = Paint().apply { color = 0x28000000 }
+
+    private val flipTick: Runnable = Runnable {
+        val a = flipAnim ?: return@Runnable
+        val t = ((System.nanoTime() - a.t0) / FLIP_NS.toFloat()).coerceIn(0f, 1f)
+        val e = 1f - (1f - t) * (1f - t)
+        camera.set(a.x0 + (a.x1 - a.x0) * e, a.y0 + (a.y1 - a.y0) * e, camera.zoom)
+        dry.invalidate()
+        if (t < 1f) {
+            postOnAnimation(flipTick)
+        } else {
+            flipAnim = null
+            listener?.onViewportChanged()
+            listener?.onSelectionChanged()
+        }
+    }
+
+    private fun cancelFlipAnim() {
+        flipAnim = null
+        removeCallbacks(flipTick)
+    }
+
+    private fun beginFlip() {
+        if (!pages.paged || fingers.size < 2) return
+        cancelFlipAnim()
+        var sx = 0f
+        var sy = 0f
+        for (p in fingers.values) {
+            sx += p.x
+            sy += p.y
+        }
+        val n = fingers.size
+        val cx = sx / n
+        val cy = sy / n
+        var span = 0f
+        for (p in fingers.values) span += hypot(p.x - cx, p.y - cy)
+        flip = Flip(currentPage(), camera.tx, camera.ty, camera.zoom, cx, cy, span.coerceAtLeast(1f))
+    }
+
+    /**
+     * Dos dedos en el sentido de las hojas: la vista sigue el dedo y, al soltar, pasa a la de al
+     * lado. Un pellizco sigue siendo zoom. Devuelve true si este movimiento ya es un pase de hoja.
+     */
+    private fun trackFlip(n: Int, nx: Float, ny: Float, span: Float): Boolean {
+        val f = flip ?: return false
+        if (n >= 3) {
+            f.pinch = true
+            return false
+        }
+        if (f.pinch) return false
+        val along = if (pages.horizontal) nx - f.x0 else ny - f.y0
+        val across = if (pages.horizontal) ny - f.y0 else nx - f.x0
+        val now = System.nanoTime()
+        val dt = (now - f.lastNs) / 1e9f
+        if (dt > 0.004f) {
+            f.velocity = (along - f.along) / dt
+            f.lastNs = now
+        }
+        f.along = along
+        val ratio = span / f.span0
+        val pinching = ratio > 1.07f || ratio < 0.93f
+        if (!f.decided) {
+            if (pinching) {
+                f.pinch = true
+                return false
+            }
+            if (abs(along) > FLIP_ARM_DP * density && abs(along) > abs(across) * 1.2f) f.decided = true
+            else return false
+        }
+        val pagePx = pages.step * camera.scale
+        val pull = along.coerceIn(-pagePx * FLIP_FOLLOW, pagePx * FLIP_FOLLOW)
+        if (pages.horizontal) camera.set(f.tx + pull, f.ty, f.zoom) else camera.set(f.tx, f.ty + pull, f.zoom)
+        return true
+    }
+
+    private fun finishFlip() {
+        val f = flip ?: return
+        flip = null
+        if (!f.decided || f.pinch || !pages.paged) return
+        val pagePx = pages.step * camera.scale
+        val threshold = min(FLIP_COMMIT_DP * density, pagePx * 0.18f)
+        val fling = abs(f.velocity) > 1400f
+        val next = f.along < -threshold || (fling && f.velocity < -700f && f.along < 0f)
+        val prev = f.along > threshold || (fling && f.velocity > 700f && f.along > 0f)
+        val target = when {
+            next -> (f.page + 1).coerceAtMost(pageCount - 1)
+            prev -> (f.page - 1).coerceAtLeast(0)
+            else -> f.page
+        }
+        if (target != f.page) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        val delta = (pages.pageStart(f.page) - pages.pageStart(target)) * (f.zoom * density)
+        val x1 = if (pages.horizontal) f.tx + delta else f.tx
+        val y1 = if (pages.horizontal) f.ty else f.ty + delta
+        startFlipAnim(camera.tx, camera.ty, x1, y1)
+    }
+
+    private fun startFlipAnim(x0: Float, y0: Float, x1: Float, y1: Float) {
+        if (x0 == x1 && y0 == y1) {
+            flipAnim = null
+            listener?.onViewportChanged()
+            dry.invalidate()
+            return
+        }
+        flipAnim = FlipAnim(x0, y0, x1, y1, System.nanoTime())
+        postOnAnimation(flipTick)
+    }
+
+    /** Una franja suave en el borde por donde entra la hoja. Una sola recta por cuadro. */
+    private fun drawFlipShade(canvas: Canvas) {
+        if (!pages.paged) return
+        val drag = flip?.takeIf { it.decided && !it.pinch }
+        val anim = flipAnim
+        if (drag == null && anim == null) return
+        val pagePx = (pages.step * camera.scale).coerceAtLeast(1f)
+        val along = if (anim != null) {
+            val axis = if (pages.horizontal) camera.tx else camera.ty
+            val target = if (pages.horizontal) anim.x1 else anim.y1
+            axis - target
+        } else {
+            drag?.along ?: 0f
+        }
+        val forward = if (anim != null) {
+            if (pages.horizontal) anim.x1 < anim.x0 else anim.y1 < anim.y0
+        } else {
+            along < 0f
+        }
+        val mag = (abs(along) / pagePx).coerceIn(0f, FLIP_FOLLOW) / FLIP_FOLLOW
+        if (mag < 0.02f) return
+        val depth = 28f * density * mag
+        flipShade.color = ((48 * mag).toInt().coerceIn(0, 48) shl 24)
+        val next = forward
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (pages.horizontal) {
+            if (next) canvas.drawRect(w - depth, 0f, w, h, flipShade) else canvas.drawRect(0f, 0f, depth, h, flipShade)
+        } else if (next) {
+            canvas.drawRect(0f, h - depth, w, h, flipShade)
+        } else {
+            canvas.drawRect(0f, 0f, w, depth, flipShade)
+        }
+    }
+
     // --- Hojas ---
 
     /** Se están corriendo las hojas (en segundo plano). */
     private var shifting = false
 
     /** La hoja que está en el medio de la pantalla. */
-    fun currentPage(): Int = pages.pageAt(camera.toWorldY(height / 2f)).coerceIn(0, pageCount - 1)
+    fun currentPage(): Int = pages.pageOf(camera.toWorldX(width / 2f), camera.toWorldY(height / 2f)).coerceIn(0, pageCount - 1)
 
     /** Agrega una hoja en blanco al final y la muestra. */
     fun addPageAtEnd() {
@@ -1948,9 +2165,99 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val k = pageCount
         setPages(pages.copy(minPages = k + 1), pages)
         // Que se vea la hoja nueva, al mismo zoom.
-        camera.set(camera.tx, -pages.pageTop(k) * camera.scale + 12 * density, camera.zoom)
+        val pad = 12 * density
+        if (pages.horizontal) camera.set(-pages.pageLeft(k) * camera.scale + pad, camera.ty, camera.zoom)
+        else camera.set(camera.tx, -pages.pageTop(k) * camera.scale + pad, camera.zoom)
         dry.invalidate()
         listener?.onViewportChanged()
+    }
+
+    /**
+     * Pasa las hojas a una debajo de la otra o de costado. Lo escrito se queda en la misma hoja.
+     * `onDone` se llama al terminar, en el hilo de la pantalla.
+     */
+    fun setDirection(horizontal: Boolean, onDone: () -> Unit = {}) {
+        if (!pages.paged || shifting || pages.horizontal == horizontal) {
+            onDone()
+            return
+        }
+        finishPending()
+        clearSelection()
+        mergeFresh()
+        cancelFlipAnim()
+        flip = null
+        val old = pages
+        val next = old.copy(horizontal = horizontal)
+        val here = currentPage()
+        fun delta(x: Float, y: Float): Pair<Float, Float> {
+            val p = old.pageOf(x, y).coerceAtLeast(0)
+            return (next.pageLeft(p) - old.pageLeft(p)) to (next.pageTop(p) - old.pageTop(p))
+        }
+        val movedStrokes = ArrayList<Triple<InkStroke, Float, Float>>()
+        for (st in strokes) {
+            if (st.left.isNaN()) continue
+            val (dx, dy) = delta((st.left + st.right) / 2, (st.top + st.bottom) / 2)
+            if (dx != 0f || dy != 0f) movedStrokes.add(Triple(st, dx, dy))
+        }
+        fun <T> moved(items: List<T>, x: (T) -> Float, y: (T) -> Float): List<Triple<T, Float, Float>> {
+            val out = ArrayList<Triple<T, Float, Float>>()
+            for (it in items) {
+                val (dx, dy) = delta(x(it), y(it))
+                if (dx != 0f || dy != 0f) out.add(Triple(it, dx, dy))
+            }
+            return out
+        }
+        val movedImages = moved(images, { it.centerX }, { it.centerY })
+        val movedTexts = moved(texts, { Elements.textBounds(it).centerX() }, { Elements.textBounds(it).centerY() })
+        val movedWidgets = moved(widgets, { it.centerX }, { it.centerY })
+        if (movedStrokes.isEmpty() && movedImages.isEmpty() && movedTexts.isEmpty() && movedWidgets.isEmpty()) {
+            setPages(next, old)
+            scrollToPage(here)
+            onDone()
+            return
+        }
+        shifting = true
+        val bulk = movedStrokes.size > WARM_NOW_LIMIT
+        val task = FutureTask(Callable {
+            val strokesCopy = Work.map(movedStrokes) { (st, dx, dy) -> st.transformedBuilt(Transform.translation(dx, dy)) }
+            if (!bulk) InkDraw.warmNow(strokesCopy)
+            Added(
+                strokesCopy,
+                movedImages.map { (i, dx, dy) -> i.transformed(Transform.translation(dx, dy)) },
+                movedTexts.map { (t, dx, dy) -> t.transformed(Transform.translation(dx, dy)) },
+                movedWidgets.map { (w, dx, dy) -> w.transformed(Transform.translation(dx, dy)) },
+            )
+        })
+        val p = Pending(task) { a ->
+            val edits = listOfNotNull(
+                removeFrom(strokes, movedStrokes.map { it.first }),
+                removeFrom(images, movedImages.map { it.first }),
+                removeFrom(texts, movedTexts.map { it.first }),
+                removeFrom(widgets, movedWidgets.map { it.first }),
+            ).toMutableList<History.Edit>()
+            strokes.addAll(a.strokes)
+            images.addAll(a.images)
+            texts.addAll(a.texts)
+            widgets.addAll(a.widgets)
+            if (a.strokes.isNotEmpty()) edits.add(History.Add(strokes, a.strokes))
+            if (a.images.isNotEmpty()) edits.add(History.Add(images, a.images))
+            if (a.texts.isNotEmpty()) edits.add(History.Add(texts, a.texts))
+            if (a.widgets.isNotEmpty()) edits.add(History.Add(widgets, a.widgets))
+            edits.add(History.Change({ setPages(old, null) }, { setPages(next, null) }))
+            setPages(next, null)
+            listener?.onEdited(History.Group(edits))
+            shifting = false
+            dry.strokesChanged()
+            elementsChanged()
+            scrollToPage(here)
+            if (bulk) InkDraw.warm(a.strokes) { false }
+            onDone()
+        }
+        pending = p
+        selectionWork.execute {
+            task.run()
+            post { complete(p) }
+        }
     }
 
     /**
@@ -1992,8 +2299,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         clearSelection()
         mergeFresh()
         val old = pages
-        fun shift(cy: Float): Float? {
-            val p = old.pageAt(cy)
+        val sideways = old.horizontal
+        fun shift(x: Float, y: Float): Float? {
+            val p = old.pageOf(x, y)
             if (p < 0) return 0f
             val q = newPage(p) ?: return null
             return (q - p) * old.step
@@ -2001,34 +2309,36 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val movedStrokes = ArrayList<Pair<InkStroke, Float>>()
         val goneStrokes = ArrayList<InkStroke>()
         for (st in strokes) {
-            if (st.top.isNaN()) continue
-            val d = shift((st.top + st.bottom) / 2)
+            if (st.left.isNaN()) continue
+            val d = shift((st.left + st.right) / 2, (st.top + st.bottom) / 2)
             if (d == null) goneStrokes.add(st) else if (d != 0f) movedStrokes.add(st to d)
         }
-        fun <T> split(items: List<T>, cy: (T) -> Float): Pair<List<Pair<T, Float>>, List<T>> {
+        fun <T> split(items: List<T>, x: (T) -> Float, y: (T) -> Float): Pair<List<Pair<T, Float>>, List<T>> {
             val moved = ArrayList<Pair<T, Float>>()
             val gone = ArrayList<T>()
             for (it in items) {
-                val d = shift(cy(it))
+                val d = shift(x(it), y(it))
                 if (d == null) gone.add(it) else if (d != 0f) moved.add(it to d)
             }
             return moved to gone
         }
-        val (movedImages, goneImages) = split(images) { it.centerY }
-        val (movedTexts, goneTexts) = split(texts) { Elements.textBounds(it).centerY() }
-        val (movedWidgets, goneWidgets) = split(widgets) { it.centerY }
+        val (movedImages, goneImages) = split(images, { it.centerX }, { it.centerY })
+        val (movedTexts, goneTexts) = split(texts, { Elements.textBounds(it).centerX() }, { Elements.textBounds(it).centerY() })
+        val (movedWidgets, goneWidgets) = split(widgets, { it.centerX }, { it.centerY })
         val new = old.copy(minPages = max(1, newCount))
         shifting = true
         val bulk = movedStrokes.size > WARM_NOW_LIMIT
         val task = FutureTask(Callable {
-            val strokesCopy = Work.map(movedStrokes) { (st, d) -> st.transformedBuilt(Transform.translation(0f, d)) }
+            val strokesCopy = Work.map(movedStrokes) { (st, d) ->
+                st.transformedBuilt(Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d))
+            }
             // Muchos trazos: las mallas de Android se calientan después, de a poco.
             if (!bulk) InkDraw.warmNow(strokesCopy)
             Added(
                 strokesCopy,
-                movedImages.map { (i, d) -> i.transformed(Transform.translation(0f, d)) },
-                movedTexts.map { (t, d) -> t.transformed(Transform.translation(0f, d)) },
-                movedWidgets.map { (w, d) -> w.transformed(Transform.translation(0f, d)) },
+                movedImages.map { (i, d) -> i.transformed(Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d)) },
+                movedTexts.map { (t, d) -> t.transformed(Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d)) },
+                movedWidgets.map { (w, d) -> w.transformed(Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d)) },
             )
         })
         val p = Pending(task) { a ->
@@ -2066,11 +2376,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
     }
 
-    /** Lleva la vista a la hoja `k`, con su borde de arriba arriba de todo y el mismo zoom. */
+    /** Lleva la vista a la hoja `k`, con su borde de arriba (o de la izquierda) al borde, y el mismo zoom. */
     fun scrollToPage(k: Int) {
         if (!pages.paged) return
-        val top = pages.pageTop(k.coerceIn(0, pageCount - 1))
-        camera.set(camera.tx, -top * camera.scale + 8 * density, camera.zoom)
+        cancelFlipAnim()
+        val i = k.coerceIn(0, pageCount - 1)
+        val pad = 8 * density
+        if (pages.horizontal) camera.set(-pages.pageLeft(i) * camera.scale + pad, camera.ty, camera.zoom)
+        else camera.set(camera.tx, -pages.pageTop(i) * camera.scale + pad, camera.zoom)
         dry.invalidate()
         listener?.onViewportChanged()
         listener?.onSelectionChanged()
@@ -2273,7 +2586,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             val view = visibleWorld(RectF())
             val bottom = camera.toWorldY(zoomPanel.top)
             var left = view.left + view.width() * 0.08f
-            if (pages.paged) left = max(left, pages.left + PageLayout.MARGIN)
+            if (pages.paged) {
+                val k = pages.pageOf(left, view.top).coerceAtLeast(0)
+                left = max(left, pages.pageLeft(k) + PageLayout.MARGIN)
+            }
             zoomBox.offsetTo(left, view.top + (bottom - view.top) * 0.35f)
             zoomLineX = zoomBox.left
         }
@@ -2294,9 +2610,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     fun zoomMove(fraction: Float) {
         if (!zoomOn) return
         zoomBox.offset(zoomBox.width() * fraction, 0f)
-        if (pages.paged && zoomBox.left > pages.right - zoomBox.width() * 0.4f) {
-            zoomNewLine()
-            return
+        if (pages.paged) {
+            val k = pages.pageOf(zoomBox.left, zoomBox.top).coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+            val edge = pages.pageLeft(k) + pages.width
+            if (zoomBox.left > edge - zoomBox.width() * 0.4f) {
+                zoomNewLine()
+                return
+            }
         }
         zoomChanged(follow = true)
     }
@@ -2517,18 +2837,32 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 pageCount = 1
                 return
             }
-            var bottom = Float.NEGATIVE_INFINITY
-            for (st in strokes) if (st.bottom > bottom) bottom = st.bottom // las sin caja (NaN) no cuentan
-            for (i in images) bottom = max(bottom, Elements.imageBounds(i).bottom)
-            for (t in texts) bottom = max(bottom, Elements.textBounds(t).bottom)
-            for (wd in widgets) bottom = max(bottom, wd.bottom)
-            lifted?.let { bottom = max(bottom, it.t.box(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom)[3]) }
-            if (bottom == Float.NEGATIVE_INFINITY) bottom = Float.NaN
-            val count = pages.count(bottom)
+            var edge = Float.NEGATIVE_INFINITY
+            fun take(right: Float, bottom: Float) {
+                if (right.isNaN() || bottom.isNaN()) return
+                val v = pages.endOf(right, bottom)
+                if (v > edge) edge = v
+            }
+            for (st in strokes) take(st.right, st.bottom)
+            for (i in images) Elements.imageBounds(i).let { take(it.right, it.bottom) }
+            for (t in texts) Elements.textBounds(t).let { take(it.right, it.bottom) }
+            for (wd in widgets) take(wd.right, wd.bottom)
+            lifted?.let {
+                val b = it.t.box(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom)
+                take(b[2], b[3])
+            }
+            if (edge == Float.NEGATIVE_INFINITY) edge = Float.NaN
+            val count = pages.count(edge)
             if (count != pageCount) {
                 // Apareció o se fue una hoja: se repinta desde la más baja de las dos.
-                val from = pages.pageTop(min(count, pageCount) - 1)
-                tiles.invalidate(RectF(pages.left - BIG, from, pages.right + BIG, pages.pageTop(max(count, pageCount)) + BIG), urgent = true)
+                val lo = min(count, pageCount) - 1
+                val hi = max(count, pageCount)
+                val area = if (pages.horizontal) {
+                    RectF(pages.pageLeft(lo) - BIG, pages.top - BIG, pages.pageLeft(hi) + pages.width + BIG, pages.top + pages.height + BIG)
+                } else {
+                    RectF(pages.left - BIG, pages.pageTop(lo), pages.right + BIG, pages.pageTop(hi) + BIG)
+                }
+                tiles.invalidate(area, urgent = true)
                 pageCount = count
                 post { listener?.onPageCountChanged(count) }
             }
@@ -2550,8 +2884,16 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             val settled = fingers.isEmpty()
             view.set(camera.toWorldX(0f), camera.toWorldY(0f), camera.toWorldX(w), camera.toWorldY(h))
             val recordScale = tiles.recordScale(camera.scale, settled)
-            tiles.neededArea(view, needed)
-            val deadline = System.nanoTime() + CHUNK_BUDGET_NS
+            val ahead = if (pages.paged) pages.step else 0f
+            val side = pages.horizontal
+            tiles.neededArea(
+                view, needed,
+                padLeft = if (side) ahead * 0.35f else 0f,
+                padTop = if (side) 0f else ahead * 0.35f,
+                padRight = if (side) ahead else 0f,
+                padBottom = if (side) 0f else ahead,
+            )
+            val deadline = System.nanoTime() + if (chunks.urgentDamage.isNotEmpty()) CHUNK_BUDGET_NS * 2 else CHUNK_BUDGET_NS
             var pending = chunks.update(needed.left, needed.top, needed.right, needed.bottom, recordScale, settled, deadline)
             for (r in chunks.urgentDamage) tiles.invalidate(r, urgent = true)
             for (r in chunks.damage) tiles.invalidate(r, urgent = false)
@@ -2580,7 +2922,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             }
             canvas.restoreToCount(save)
 
-            pending = tiles.draw(canvas, view, camera.scale, camera.tx, camera.ty, settled, this) || pending
+            pending = tiles.draw(
+                canvas, view, camera.scale, camera.tx, camera.ty, settled, this,
+                padLeft = if (side) ahead * 0.35f else 0f,
+                padTop = if (side) 0f else ahead * 0.35f,
+                padRight = if (side) ahead else 0f,
+                padBottom = if (side) 0f else ahead,
+            ) || pending
 
             save = canvas.save()
             canvas.concat(worldToScreen)
@@ -2609,6 +2957,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 cursorPaint.color = if (dark) 0x99E0E0E0.toInt() else 0x99404040.toInt()
                 canvas.drawCircle(it.x, it.y, eraserRadius * density, cursorPaint)
             }
+            drawFlipShade(canvas)
+            if (flipAnim != null || flip?.decided == true) pending = true
             // Con todo quieto y pintado, se adelanta trabajo para cuando se aleje la vista.
             if (!pending && settled && penPointer == NONE && fresh.isEmpty()) {
                 // La imagen de toda la nota (se arma en otros hilos), para que al alejar la vista
@@ -2934,10 +3284,16 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         const val CLICK_MS = 500L
 
         /** Tiempo por cuadro para grabar tandas de trazos que no corren prisa. */
-        const val CHUNK_BUDGET_NS = 4_000_000L
+        const val CHUNK_BUDGET_NS = 6_000_000L
 
         /** Tiempo por cuadro para grabar tandas lejanas con la vista quieta. */
-        const val PREWARM_NS = 3_000_000L
+        const val PREWARM_NS = 4_000_000L
+
+        /** El pase de hoja: un desliz corto no cuenta, y la hoja sigue al dedo hasta esta fracción. */
+        const val FLIP_ARM_DP = 32f
+        const val FLIP_COMMIT_DP = 72f
+        const val FLIP_FOLLOW = 0.42f
+        const val FLIP_NS = 170_000_000L
 
         /** Los trazos frescos pasan a las baldosas cuando el lápiz descansa este tiempo... */
         const val MERGE_DELAY_MS = 700L

@@ -42,7 +42,7 @@ object Exporter {
         val out = ArrayList<File>()
         val bounds = Render.bounds(strokes, n.images, n.texts, n.widgets)
         if (n.pages.paged) {
-            val used = n.pages.used(bounds?.bottom ?: Float.NaN)
+            val used = n.pages.used(if (bounds == null) Float.NaN else n.pages.endOf(bounds.right, bounds.bottom))
             // Unos 250 puntos por pulgada: se lee bien en el celular y no pesa tanto.
             val width = (n.pages.width * PAGE_PX_PER_DP).toInt()
             for (k in 0 until used) {
@@ -76,7 +76,7 @@ object Exporter {
         var page = -1
         for (line in sorted) {
             if (n.pages.paged) {
-                val k = n.pages.pageAt((line.top + line.bottom) / 2).coerceAtLeast(0)
+                val k = n.pages.pageOf((line.left + line.right) / 2, (line.top + line.bottom) / 2).coerceAtLeast(0)
                 if (k != page) {
                     if (page >= 0) append('\n')
                     append("— Hoja ").append(k + 1).append(" —\n")

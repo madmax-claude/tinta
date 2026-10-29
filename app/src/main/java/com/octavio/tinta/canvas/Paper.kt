@@ -60,17 +60,20 @@ class Paper(vector: Boolean = false, color: Int? = null) {
             return
         }
         canvas.drawColor(if (dark) DARK_DESK else DESK)
-        val top = -ty / scale
-        val bottom = (height - ty) / scale
-        val first = pages.pageAt(top).coerceAtLeast(0)
-        val last = pages.pageAt(bottom).coerceAtMost(pageCount - 1)
-        val l = pages.left * scale + tx
-        val r = pages.right * scale + tx
-        if (r < 0f || l > width) return
+        val worldLeft = -tx / scale
+        val worldTop = -ty / scale
+        val worldRight = (width - tx) / scale
+        val worldBottom = (height - ty) / scale
+        val first = pages.pageAt(if (pages.horizontal) worldLeft else worldTop).coerceAtLeast(0)
+        val last = pages.pageAt(if (pages.horizontal) worldRight else worldBottom).coerceAtMost(pageCount - 1)
+        if (first > last) return
         val shadow = max(1f, scale * 1.5f)
         for (k in first..last) {
+            val l = pages.pageLeft(k) * scale + tx
             val t = pages.pageTop(k) * scale + ty
+            val r = l + pages.width * scale
             val b = t + pages.height * scale
+            if (r < 0f || l > width || b < 0f || t > height) continue
             fill.color = if (dark) 0x66000000 else 0x22000000
             canvas.drawRect(l + shadow * 0.5f, t + shadow, r + shadow * 0.5f, b + shadow, fill)
             fill.color = if (dark) DARK else color
@@ -78,7 +81,7 @@ class Paper(vector: Boolean = false, color: Int? = null) {
             val save = canvas.save()
             canvas.clipRect(max(l, 0f), max(t, 0f), min(r, width), min(b, height))
             // El dibujo empieza en la esquina de la hoja: el mismo en todas.
-            pattern(canvas, background, scale, l, t, width, height, dark, pages.copy(left = 0f, top = 0f))
+            pattern(canvas, background, scale, l, t, width, height, dark, pages.copy(left = 0f, top = 0f, horizontal = false))
             canvas.restoreToCount(save)
         }
     }

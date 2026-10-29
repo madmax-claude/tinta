@@ -587,7 +587,9 @@ object Popups {
         anchor: View,
         current: Int,
         count: Int,
+        horizontal: Boolean,
         stripShown: Boolean,
+        onDirection: (Boolean) -> Unit,
         onToggleStrip: () -> Unit,
         onAddAtEnd: () -> Unit,
         onInsert: (after: Boolean) -> Unit,
@@ -598,6 +600,26 @@ object Popups {
         lateinit var popup: PopupWindow
         box.addView(label(c, "Hojas", 15f))
         box.addView(hint(c, "Estás en la hoja ${current + 1} de $count."), topMargin(c, 2f))
+        box.addView(label(c, "Cómo se pasan", 15f), topMargin(c, 10f))
+        val turn = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
+        val down = chip(c, "Hacia abajo")
+        val side = chip(c, "Cuaderno")
+        down.isSelected = !horizontal
+        side.isSelected = horizontal
+        turn.addView(down, LinearLayout.LayoutParams(0, c.dp(40f).toInt(), 1f))
+        turn.addView(side, LinearLayout.LayoutParams(0, c.dp(40f).toInt(), 1f))
+        box.addView(turn, topMargin(c, 6f))
+        box.addView(
+            hint(c, "Hacia abajo van una debajo de la otra; en el cuaderno, de costado. Con dos dedos deslizá en ese sentido para pasar de hoja. Un pellizco sigue haciendo zoom."),
+            topMargin(c, 4f),
+        )
+        for ((v, value) in listOf(down to false, side to true)) {
+            v.setOnClickListener {
+                if (value == horizontal) return@setOnClickListener
+                popup.dismiss()
+                onDirection(value)
+            }
+        }
         fun action(text: String, icon: Int, color: Int? = null, run: () -> Unit) = Button(c, null, 0, android.R.style.Widget_DeviceDefault_Button_Borderless_Colored).apply {
             this.text = text
             isAllCaps = false

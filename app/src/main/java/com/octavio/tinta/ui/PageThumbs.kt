@@ -107,12 +107,14 @@ class PageThumbs(private val widthPx: Int) {
     private fun signatures(s: Snapshot): IntArray {
         val p = s.pages
         var last = 0
-        val pageOf = { cy: Float -> p.pageAt(cy) }
         val all = ArrayList<Pair<Int, Int>>(s.strokes.size + s.images.size + s.texts.size + s.widgets.size)
-        for (st in s.strokes) if (!st.top.isNaN()) all.add(pageOf((st.top + st.bottom) / 2) to System.identityHashCode(st))
-        for (i in s.images) all.add(pageOf(i.centerY) to System.identityHashCode(i))
-        for (t in s.texts) all.add(pageOf(Elements.textBounds(t).centerY()) to System.identityHashCode(t))
-        for (w in s.widgets) all.add(pageOf(w.centerY) to System.identityHashCode(w))
+        for (st in s.strokes) if (!st.top.isNaN()) all.add(p.pageOf((st.left + st.right) / 2, (st.top + st.bottom) / 2) to System.identityHashCode(st))
+        for (i in s.images) all.add(p.pageOf(i.centerX, i.centerY) to System.identityHashCode(i))
+        for (t in s.texts) {
+            val b = Elements.textBounds(t)
+            all.add(p.pageOf(b.centerX(), b.centerY()) to System.identityHashCode(t))
+        }
+        for (w in s.widgets) all.add(p.pageOf(w.centerX, w.centerY) to System.identityHashCode(w))
         for ((k, _) in all) if (k > last) last = k
         val base = base(s)
         val sig = IntArray(last + 2) { base }

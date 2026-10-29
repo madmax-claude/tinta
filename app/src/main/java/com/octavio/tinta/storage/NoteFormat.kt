@@ -43,18 +43,24 @@ import java.util.zip.InflaterInputStream
  *         alto, giro, byte banderas (1: bloqueada), UTF nombre del archivo en la carpeta de medios
  *         de la nota; y después de los textos, int cantidad de widgets y por cada uno int largo y
  *         su JSON en UTF-8 (ver [Widget])
+ *     desde la versión 10, al final de la cabecera: boolean hojas de costado (ver [PageLayout.horizontal])
  *
  * La cabecera va sin comprimir y antes que los trazos, para que la lista de notas la lea sola.
  */
 object NoteFormat {
     const val MAGIC = "TINTA"
-    const val VERSION = 9
+    const val VERSION = 10
 
     /**
-     * La versión con que se guarda una nota: la 9 sólo si tiene líneas a rayas o de puntos (el
-     * bloque de líneas); si no, la 8, que también abren las versiones anteriores de la app.
+     * La versión con que se guarda una nota. La 10 sólo si las hojas van de costado (el cuaderno);
+     * la 9 si tiene líneas a rayas o de puntos; si no, la 8, que también abren las versiones
+     * anteriores de la app.
      */
-    fun versionFor(hasGroups: Boolean) = if (hasGroups) VERSION else 8
+    fun versionFor(hasGroups: Boolean, horizontal: Boolean = false) = when {
+        horizontal -> 10
+        hasGroups -> 9
+        else -> 8
+    }
 
     data class Header(
         val title: String,
@@ -103,6 +109,7 @@ object NoteFormat {
         out.writeFloat(h.viewport.width)
         out.writeFloat(h.viewport.height)
         out.writeInt(h.paperColor ?: 0)
+        if (h.version >= 10) out.writeBoolean(h.pages.horizontal)
     }
 
     fun readHeader(input: DataInputStream): Header {
@@ -125,6 +132,7 @@ object NoteFormat {
         if (version >= 5) pages = pages.copy(minPages = input.readInt().coerceIn(0, MAX_PAGES))
         if (version >= 6) viewport = viewport.copy(width = input.readFloat(), height = input.readFloat())
         val paperColor = if (version >= 8) input.readInt().takeIf { it != 0 } else null
+        if (version >= 10) pages = pages.copy(horizontal = input.readBoolean())
         return Header(title, background, created, modified, viewport, strokeCount, pages, version, paperColor)
     }
 

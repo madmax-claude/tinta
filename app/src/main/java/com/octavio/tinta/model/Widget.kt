@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Lo que no es tinta ni imagen: gráficos de funciones, figuras 3D, notas de voz y videos. Cada uno
+ * Lo que no es tinta ni imagen: gráficos de funciones, figuras 2D y 3D, notas de voz y videos. Cada uno
  * ocupa un rectángulo del mundo y se guarda como JSON, así agregar datos no cambia el formato.
  * No giran: al girar lo elegido con el lazo sólo se mueve su centro.
  */
@@ -69,6 +69,10 @@ sealed class Widget {
                     l, t, w, h, SolidKind.fromId(o.getString("kind")),
                     f("a", 1f), f("b", 1f), f("c", 1f), f("yaw", 30f), f("pitch", 20f),
                     o.optInt("color", Tool.INK_COLORS[0]), o.optBoolean("hidden", true), o.optBoolean("shaded", true),
+                )
+                "figure2d" -> Figure2D(
+                    l, t, w, h, FigureKind.fromId(o.getString("kind")),
+                    o.optInt("color", Tool.INK_COLORS[0]), o.optBoolean("filled", false),
                 )
                 "media" -> Media(
                     l, t, w, h,
@@ -171,6 +175,44 @@ data class Solid(
         .put("a", a.toDouble()).put("b", b.toDouble()).put("c", c.toDouble())
         .put("yaw", yaw.toDouble()).put("pitch", pitch.toDouble())
         .put("color", color).put("hidden", hiddenEdges).put("shaded", shaded)
+}
+
+/** Figuras planas. El rectángulo del widget es el que las contiene. */
+enum class FigureKind(val id: String, val label: String) {
+    SQUARE("cuadrado", "Cuadrado"),
+    RECT("rect", "Rectángulo"),
+    CIRCLE("circulo", "Círculo"),
+    ELLIPSE("elipse", "Elipse"),
+    TRIANGLE("triangulo", "Triángulo"),
+    RIGHT("rectangulo3", "Triángulo rectángulo"),
+    DIAMOND("rombo", "Rombo"),
+    TRAPEZOID("trapecio", "Trapecio"),
+    PARALLELOGRAM("paralelogramo", "Paralelogramo"),
+    PENTAGON("pentagono", "Pentágono"),
+    HEXAGON("hexagono", "Hexágono"),
+    ARROW("flecha", "Flecha");
+
+    companion object {
+        fun fromId(id: String) = entries.firstOrNull { it.id == id } ?: RECT
+    }
+}
+
+/** Figura 2D, del color de la tinta. Con `filled` lleva un relleno suave. */
+data class Figure2D(
+    override val left: Float,
+    override val top: Float,
+    override val width: Float,
+    override val height: Float,
+    val kind: FigureKind,
+    val color: Int,
+    val filled: Boolean,
+) : Widget() {
+    override fun placed(left: Float, top: Float, width: Float, height: Float) = copy(left = left, top = top, width = width, height = height)
+
+    override fun toJson(): JSONObject = rect("figure2d")
+        .put("kind", kind.id)
+        .put("color", color)
+        .put("filled", filled)
 }
 
 enum class MediaKind { AUDIO, VIDEO }

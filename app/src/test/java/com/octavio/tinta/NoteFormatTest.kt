@@ -64,6 +64,24 @@ class NoteFormatTest {
         assertEquals(audio, widgets[1])
     }
 
+    @Test
+    fun flatFigureRoundTrip() {
+        val figure = com.octavio.tinta.model.Figure2D(4f, 8f, 120f, 80f, com.octavio.tinta.model.FigureKind.HEXAGON, 0xFF1E5BD8.toInt(), filled = true)
+        val back = com.octavio.tinta.model.Widget.fromJson(figure.toJson(), java.io.File("/tmp"))
+        assertEquals(figure, back)
+    }
+
+    @Test
+    fun notebookHeaderRoundTrip() {
+        val header = NoteFormat.Header(
+            "Cuaderno", Background.LINES, 1L, 2L, Viewport(), 0,
+            PageLayout(PageSize.A5, horizontal = true, minPages = 3),
+            version = 10,
+        )
+        val bytes = ByteArrayOutputStream().also { buf -> DataOutputStream(buf).use { NoteFormat.writeHeader(it, header) } }.toByteArray()
+        assertEquals(header, DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readHeader(it) })
+    }
+
     /** Una nota de la versión 2 (sin hojas) se sigue leyendo, como infinita. */
     @Test
     fun readsVersion2() {
@@ -113,8 +131,11 @@ class NoteFormatTest {
     @Test
     fun notesWithoutDashedLinesKeepTheOlderVersion() {
         // Sin líneas a rayas se guarda la 8: la abren también las versiones anteriores de la app.
+        // El cuaderno (hojas de costado) necesita la 10; si no, la 9 sólo cuando hay rayas.
         assertEquals(8, NoteFormat.versionFor(hasGroups = false))
-        assertEquals(NoteFormat.VERSION, NoteFormat.versionFor(hasGroups = true))
+        assertEquals(9, NoteFormat.versionFor(hasGroups = true))
+        assertEquals(10, NoteFormat.versionFor(hasGroups = false, horizontal = true))
+        assertEquals(10, NoteFormat.versionFor(hasGroups = true, horizontal = true))
         val header = NoteFormat.Header("Vieja", Background.GRID, 1L, 2L, Viewport(), 0, version = 8)
         val bytes = ByteArrayOutputStream().also { buf -> DataOutputStream(buf).use { NoteFormat.writeHeader(it, header) } }.toByteArray()
         assertEquals(8, DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readHeader(it) }.version)

@@ -23,14 +23,17 @@ import com.octavio.tinta.R
 import com.octavio.tinta.canvas.WidgetPainter
 import com.octavio.tinta.dp
 import com.octavio.tinta.model.Expr
+import com.octavio.tinta.model.Figure2D
+import com.octavio.tinta.model.FigureKind
 import com.octavio.tinta.model.Graph2D
 import com.octavio.tinta.model.Graph3D
 import com.octavio.tinta.model.Solid
 import com.octavio.tinta.model.SolidKind
+import com.octavio.tinta.model.Tool
 import com.octavio.tinta.model.Widget
 
 /**
- * Ventanas para crear o cambiar gráficos y figuras 3D, con una vista previa que se actualiza al
+ * Ventanas para crear o cambiar gráficos y figuras, con una vista previa que se actualiza al
  * escribir. Las de 3D se giran arrastrando la vista previa. El rectángulo del resultado lo pone
  * quien llama (la posición en la hoja no se toca acá).
  */
@@ -146,25 +149,43 @@ object WidgetEditors {
         }
     }
 
-    fun solid(activity: Activity, start: Solid, dark: Boolean, isNew: Boolean, onDone: (Solid) -> Unit) {
+    fun solid(activity: Activity, start: Widget, dark: Boolean, isNew: Boolean, onDone: (Widget) -> Unit) {
         val c: Context = activity
-        var s = start
+        val color = when (start) {
+            is Solid -> start.color
+            is Figure2D -> start.color
+            else -> Tool.INK_COLORS[0]
+        }
+        var body = start as? Solid ?: Solid(0f, 0f, 0f, 0f, SolidKind.CUBE, 1f, 1f, 1f, 30f, 20f, color, hiddenEdges = true, shaded = true)
+        var flat = start as? Figure2D ?: Figure2D(0f, 0f, 0f, 0f, FigureKind.RECT, color, filled = false)
+        var planar = start is Figure2D
         val box = column(c)
         val preview = WidgetPreview(c, dark)
-        box.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, c.dp(260f).toInt()))
-        box.addView(label(c, "Arrastrá la figura para girarla.").apply { gravity = Gravity.CENTER })
+        box.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, c.dp(220f).toInt()))
+        val drag = label(c, "").apply { gravity = Gravity.CENTER }
+        box.addView(drag)
+        box.addView(label(c, "Planas"), top(c, 8f))
+        val flats = GridLayout(c).apply { columnCount = 3 }
+        box.addView(flats, top(c, 6f))
+        val filled = CheckBox(c).apply {
+            text = "Rellenar"
+            isChecked = flat.filled
+            setTextColor(c.getColor(R.color.ink))
+        }
+        box.addView(filled)
+        box.addView(label(c, "En 3D"), top(c, 8f))
         val kinds = GridLayout(c).apply { columnCount = 3 }
-        box.addView(kinds, top(c, 8f))
+        box.addView(kinds, top(c, 6f))
         val sizes = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
         box.addView(sizes, top(c, 6f))
         val hidden = CheckBox(c).apply {
             text = "Aristas de atrás punteadas"
-            isChecked = s.hiddenEdges
+            isChecked = body.hiddenEdges
             setTextColor(c.getColor(R.color.ink))
         }
         val shaded = CheckBox(c).apply {
             text = "Caras sombreadas"
-            isChecked = s.shaded
+            isChecked = body.shaded
             setTextColor(c.getColor(R.color.ink))
         }
         box.addView(hidden)
@@ -173,8 +194,8 @@ object WidgetEditors {
         lateinit var refresh: () -> Unit
         fun sliders() {
             sizes.removeAllViews()
-            val values = floatArrayOf(s.a, s.b, s.c)
-            s.kind.labels.forEachIndexed { k, name ->
+            val values = floatArrayOf(body.a, body.b, body.c)
+            body.kind.labels.forEachIndexed { k, name ->
                 val text = label(c, "")
                 fun show(v: Float) {
                     text.text = "$name: ${"%.1f".format(v)}"
@@ -189,12 +210,12 @@ object WidgetEditors {
                             if (!fromUser) return
                             val v = 0.2f + 2.8f * p / 100f
                             show(v)
-                            s = when (k) {
-                                0 -> s.copy(a = v)
-                                1 -> s.copy(b = v)
-                                else -> s.copy(c = v)
+                            body = when (k) {
+                                0 -> body.copy(a = v)
+                                1 -> body.copy(b = v)
+                                else -> body.copy(c = v)
                             }
-                            preview.widget = s
+                            preview.widget = body
                         }
 
                         override fun onStartTrackingTouch(bar: SeekBar) = Unit
@@ -203,45 +224,70 @@ object WidgetEditors {
                 })
             }
         }
+        fun chip(text: String, grid: GridLayout, onClick: () -> Unit) = TextView(c).apply {
+            this.text = text
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(c.getColor(R.color.ink))
+            background = c.getDrawable(R.drawable.bg_tool)
+            val p = c.dp(6f).toInt()
+            setPadding(p, p, p, p)
+            setOnClickListener { onClick() }
+        }.also {
+            grid.addView(it, GridLayout.LayoutParams().apply {
+                width = c.dp(150f).toInt()
+                setMargins(0, 0, c.dp(4f).toInt(), c.dp(4f).toInt())
+            })
+        }
+        val flatChips = FigureKind.entries.associateWith { kind ->
+            chip(kind.label, flats) {
+                planar = true
+                flat = flat.copy(kind = kind)
+                refresh()
+            }
+        }
         val chips = SolidKind.entries.associateWith { kind ->
-            TextView(c).apply {
-                text = kind.label
-                textSize = 13f
-                gravity = Gravity.CENTER
-                setTextColor(c.getColor(R.color.ink))
-                background = c.getDrawable(R.drawable.bg_tool)
-                val p = c.dp(6f).toInt()
-                setPadding(p, p, p, p)
-                setOnClickListener {
-                    s = s.copy(kind = kind)
-                    refresh()
-                }
-            }.also {
-                kinds.addView(it, GridLayout.LayoutParams().apply {
-                    width = c.dp(150f).toInt()
-                    setMargins(0, 0, c.dp(4f).toInt(), c.dp(4f).toInt())
-                })
+            chip(kind.label, kinds) {
+                planar = false
+                body = body.copy(kind = kind)
+                refresh()
             }
         }
         refresh = {
-            for ((k, v) in chips) v.isSelected = k == s.kind
-            sliders()
-            preview.widget = s
+            for ((k, v) in flatChips) v.isSelected = planar && k == flat.kind
+            for ((k, v) in chips) v.isSelected = !planar && k == body.kind
+            val show = if (planar) View.GONE else View.VISIBLE
+            sizes.visibility = show
+            hidden.visibility = show
+            shaded.visibility = show
+            filled.visibility = if (planar) View.VISIBLE else View.GONE
+            drag.text = if (planar) "Después le cambiás el tamaño con el lazo." else "Arrastrá la figura para girarla."
+            if (planar) {
+                preview.onRotate = null
+                preview.widget = flat
+            } else {
+                sliders()
+                preview.onRotate = { yaw, pitch ->
+                    body = body.copy(yaw = yaw, pitch = pitch)
+                    preview.widget = body
+                }
+                preview.widget = body
+            }
+        }
+        filled.setOnCheckedChangeListener { _, v ->
+            flat = flat.copy(filled = v)
+            if (planar) preview.widget = flat
         }
         hidden.setOnCheckedChangeListener { _, v ->
-            s = s.copy(hiddenEdges = v)
-            preview.widget = s
+            body = body.copy(hiddenEdges = v)
+            if (!planar) preview.widget = body
         }
         shaded.setOnCheckedChangeListener { _, v ->
-            s = s.copy(shaded = v)
-            preview.widget = s
-        }
-        preview.onRotate = { yaw, pitch ->
-            s = s.copy(yaw = yaw, pitch = pitch)
-            preview.widget = s
+            body = body.copy(shaded = v)
+            if (!planar) preview.widget = body
         }
         refresh()
-        show(activity, if (isNew) "Figura 3D" else "Cambiar la figura", box, isNew) { onDone(s) }
+        show(activity, if (isNew) "Figura" else "Cambiar la figura", box, isNew) { onDone(if (planar) flat else body) }
     }
 
     // --- Armado ---

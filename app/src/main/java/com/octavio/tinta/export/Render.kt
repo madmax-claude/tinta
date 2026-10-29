@@ -76,7 +76,7 @@ object Render {
             top = (b?.top ?: 0f) - MARGIN / 2
             scale = min(width / max((b?.width() ?: 0f) + MARGIN, 1f), 1.5f)
         }
-        val count = pages.count(b?.bottom ?: Float.NaN)
+        val count = pages.count(if (b == null) Float.NaN else pages.endOf(b.right, b.bottom))
         draw(canvas, strokes, images, texts, widgets, 512, background, pages, count, scale, -left * scale, -top * scale, width.toFloat(), height.toFloat(), Paper(color = paperColor))
         return bitmap
     }
@@ -129,7 +129,8 @@ object Render {
         pages: PageLayout,
         paperColor: Int?,
     ): File {
-        val used = pages.used(bounds(strokes, images, texts, widgets)?.bottom ?: Float.NaN)
+        val box = bounds(strokes, images, texts, widgets)
+        val used = pages.used(if (box == null) Float.NaN else pages.endOf(box.right, box.bottom))
         // 160 dp por pulgada, 72 pt por pulgada: la hoja sale del tamaño real.
         val scale = 72f / 160f
         val pageWidth = (pages.width * scale).toInt()
@@ -139,7 +140,7 @@ object Render {
         try {
             for (k in 0 until used) {
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, k + 1).create())
-                val tx = -pages.left * scale
+                val tx = -pages.pageLeft(k) * scale
                 val ty = -pages.pageTop(k) * scale
                 draw(page.canvas, strokes, images, texts, widgets, 3000, background, pages, used, scale, tx, ty, pageWidth.toFloat(), pageHeight.toFloat(), paper)
                 doc.finishPage(page)
@@ -251,7 +252,7 @@ object Render {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         draw(
             Canvas(bitmap), strokes, images, texts, widgets, 256, background, pages, k + 1, scale,
-            -pages.left * scale, -pages.pageTop(k) * scale, width.toFloat(), height.toFloat(), Paper(color = paperColor),
+            -pages.pageLeft(k) * scale, -pages.pageTop(k) * scale, width.toFloat(), height.toFloat(), Paper(color = paperColor),
         )
         return bitmap
     }

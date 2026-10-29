@@ -48,6 +48,26 @@ class PageLayoutTest {
     }
 
     @Test
+    fun notebookStacksPagesSideBySide() {
+        val p = PageLayout(PageSize.A5, horizontal = true, left = 10f, top = 20f)
+        assertEquals(p.width + PageLayout.GAP, p.step, 0f)
+        assertEquals(10f, p.pageLeft(0), 0f)
+        assertEquals(20f, p.pageTop(0), 0f)
+        assertEquals(20f, p.pageTop(1), 0f)
+        assertEquals(p.pageLeft(0) + p.step, p.pageLeft(1), 0f)
+        assertEquals(1, p.pageOf(p.pageLeft(1) + 4f, p.top + 4f))
+        // El hueco entre dos hojas cuenta para la de la izquierda.
+        assertEquals(0, p.pageOf(p.pageLeft(1) - PageLayout.GAP / 2, p.top))
+        val far = p.pageLeft(2) + 10f
+        assertEquals(4, p.count(far))
+        assertEquals(3, p.used(far))
+        // En vertical el eje sigue siendo la altura: la x no cambia de hoja.
+        val down = PageLayout(PageSize.A5, top = 100f)
+        assertEquals(0, down.pageOf(down.right + 500f, down.top + 10f))
+        assertFalse(down.horizontal)
+    }
+
+    @Test
     fun aroundExistingWriting() {
         val p = PageLayout.around(PageSize.LETTER, false, 300f, -20f)
         assertEquals(300f - PageLayout.MARGIN, p.left, 0f)

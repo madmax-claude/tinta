@@ -99,13 +99,20 @@ class StrokeChunks {
             val built = c.next.count { it.stroke != null }
             if (!sameMembers(c)) {
                 val first = c.members.isEmpty() && !c.recorded && !opened
+                val had = c.recorded
+                val old = if (had) RectF(c.recordedBounds) else null
                 c.members = c.next.also { c.next = c.members }
                 c.contentDirty = !first
                 updateBounds(c)
                 rootDirty = true
-                if (c.members.isEmpty() && c.recorded) {
-                    // Se vació: se borra su grabación y se repinta donde estaba.
-                    urgentDamage.add(RectF(c.recordedBounds))
+                if (old != null) {
+                    // Aunque queden otros trazos, lo borrado tiene que salir de las baldosas ya:
+                    // si la caja nueva no toca la vista, nadie volvería a grabar esta tanda y la
+                    // tinta borrada se quedaría hasta cambiar el zoom.
+                    if (c.members.isNotEmpty() && c.left.isFinite()) old.union(c.left, c.top, c.right, c.bottom)
+                    urgentDamage.add(old)
+                }
+                if (c.members.isEmpty() && had) {
                     c.node.discardDisplayList()
                     c.recorded = false
                 }
@@ -159,16 +166,23 @@ class StrokeChunks {
     fun update(l: Float, t: Float, r: Float, b: Float, scale: Float, settled: Boolean, deadline: Long): Boolean {
         var pending = false
         for (c in chunks) {
-            if (!c.intersects(l, t, r, b)) continue
+            val live = c.intersects(l, t, r, b)
+            // La caja vieja puede seguir a la vista aunque la nueva ya no: hay que regrabar igual,
+            // si no las baldosas copian la tinta que se borró.
+            val was = c.contentDirty && c.recorded && hits(c.recordedBounds, l, t, r, b)
+            if (!live && !was) continue
             val blurry = settled && c.recorded && abs(ln(scale / c.recordedScale)) > REZOOM
             when {
                 c.contentDirty -> record(c, scale, urgent = true)
-                c.meshDirty || blurry || !c.recorded ->
+                live && (c.meshDirty || blurry || !c.recorded) ->
                     if (System.nanoTime() < deadline) record(c, scale, urgent = false) else pending = true
             }
         }
         return pending
     }
+
+    private fun hits(o: RectF, l: Float, t: Float, r: Float, b: Float) =
+        !(o.right < l || o.left > r || o.bottom < t || o.top > b)
 
     /**
      * Graba, hasta `deadline`, tandas que nunca se grabaron aunque estén lejos de la vista. Se

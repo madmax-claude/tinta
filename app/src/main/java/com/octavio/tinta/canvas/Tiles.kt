@@ -76,7 +76,7 @@ class Tiles(private val density: Float) {
      * Trazos que se pueden reproducir por cuadro al pintar baldosas nuevas. Lo ajusta
      * [adapt] según lo que tardan de verdad los cuadros en esta tablet.
      */
-    var budget = 1500
+    var budget = 2200
         private set
 
     /**
@@ -147,14 +147,25 @@ class Tiles(private val density: Float) {
      * El rectángulo del mundo que cubren las baldosas a la vista y las de alrededor (una vuelta,
      * y [AHEAD_ROWS] filas arriba y abajo) en la escala actual.
      */
-    fun neededArea(view: RectF, out: RectF): RectF {
+    fun neededArea(
+        view: RectF,
+        out: RectF,
+        padLeft: Float = 0f,
+        padTop: Float = 0f,
+        padRight: Float = 0f,
+        padBottom: Float = 0f,
+    ): RectF {
         val span = SIZE / levelScale(level)
+        val left = view.left - padLeft
+        val top = view.top - padTop
+        val right = view.right + padRight
+        val bottom = view.bottom + padBottom
         return out.apply {
             set(
-                (floor(view.left / span) - 1) * span,
-                (floor(view.top / span) - AHEAD_ROWS) * span,
-                (floor(view.right / span) + 2) * span,
-                (floor(view.bottom / span) + 1 + AHEAD_ROWS) * span,
+                (floor(left / span) - 1) * span,
+                (floor(top / span) - AHEAD_ROWS) * span,
+                (floor(right / span) + 2) * span,
+                (floor(bottom / span) + 1 + AHEAD_ROWS) * span,
             )
         }
     }
@@ -165,7 +176,19 @@ class Tiles(private val density: Float) {
      * false (dedos moviendo la vista) sólo se pinta lo que entra en el presupuesto, para no trabar
      * el movimiento. Devuelve true si quedó algo por pintar.
      */
-    fun draw(canvas: Canvas, view: RectF, scale: Float, tx: Float, ty: Float, settled: Boolean, content: Content): Boolean {
+    fun draw(
+        canvas: Canvas,
+        view: RectF,
+        scale: Float,
+        tx: Float,
+        ty: Float,
+        settled: Boolean,
+        content: Content,
+        padLeft: Float = 0f,
+        padTop: Float = 0f,
+        padRight: Float = 0f,
+        padBottom: Float = 0f,
+    ): Boolean {
         frame++
         val span = SIZE / levelScale(level)
         val ix0 = floor(view.left / span).toInt()
@@ -174,13 +197,20 @@ class Tiles(private val density: Float) {
         val iy1 = floor(view.bottom / span).toInt()
         val cx = (ix0 + ix1) / 2f
         val cy = (iy0 + iy1) / 2f
+        // Unas baldosas más en el sentido de las hojas, para que la de al lado ya esté pintada.
+        val extraL = ceil(padLeft / span).toInt().coerceAtMost(MAX_EXTRA)
+        val extraT = ceil(padTop / span).toInt().coerceAtMost(MAX_EXTRA)
+        val extraR = ceil(padRight / span).toInt().coerceAtMost(MAX_EXTRA)
+        val extraB = ceil(padBottom / span).toInt().coerceAtMost(MAX_EXTRA)
 
         // Las de la vista primero (del centro hacia afuera), después las de alrededor: una vuelta y
         // más filas arriba y abajo, porque las notas se recorren sobre todo hacia abajo. Las de
         // afuera se pintan sólo si sobra presupuesto, y se dibujan (fuera de la pantalla) para que
         // Android no suelte su capa.
         val wanted = ArrayList<Tile>()
-        for (iy in iy0 - AHEAD_ROWS..iy1 + AHEAD_ROWS) for (ix in ix0 - 1..ix1 + 1) wanted.add(tile(level, ix, iy, span))
+        for (iy in iy0 - AHEAD_ROWS - extraT..iy1 + AHEAD_ROWS + extraB) {
+            for (ix in ix0 - 1 - extraL..ix1 + 1 + extraR) wanted.add(tile(level, ix, iy, span))
+        }
         wanted.sortBy {
             val inside = it.ix in ix0..ix1 && it.iy in iy0..iy1
             val d = (it.ix - cx) * (it.ix - cx) + (it.iy - cy) * (it.iy - cy)
@@ -336,5 +366,8 @@ class Tiles(private val density: Float) {
 
         /** Filas que se preparan arriba y abajo de la vista. */
         private const val AHEAD_ROWS = 2
+
+        /** Baldosas de más, como mucho, al adelantar la hoja de al lado. */
+        private const val MAX_EXTRA = 8
     }
 }

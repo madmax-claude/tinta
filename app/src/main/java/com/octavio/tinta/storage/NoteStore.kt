@@ -183,7 +183,7 @@ class NoteStore private constructor(context: Context) {
             val deflater = Deflater(Deflater.BEST_SPEED)
             try {
                 val bos = BufferedOutputStream(fos, 1 shl 16)
-                val version = NoteFormat.versionFor(strokes.any { it.group != 0L })
+                val version = NoteFormat.versionFor(strokes.any { it.group != 0L }, header.pages.horizontal)
                 NoteFormat.writeHeader(DataOutputStream(bos), header.copy(version = version, strokeCount = strokes.size))
                 val compressed = DeflaterOutputStream(bos, deflater, 1 shl 16)
                 // Sin búfer, DataOutputStream le pasa al compresor un byte por vez.
