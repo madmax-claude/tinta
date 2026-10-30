@@ -39,6 +39,8 @@ import java.util.zip.InflaterInputStream
  *             int largo, bytes del PNG/JPG
  *         int cantidad de textos, y por cada uno: float izquierda, arriba, ancho, alto, tamaño,
  *             int color, int largo, texto en UTF-8
+ *             desde la versión 11, después de cada texto: UTF id de la letra y byte 1 si el
+ *             recuadro recorta lo que no entra
  *     desde la versión 4 las imágenes no van adentro: por cada una, float izquierda, arriba, ancho,
  *         alto, giro, byte banderas (1: bloqueada), UTF nombre del archivo en la carpeta de medios
  *         de la nota; y después de los textos, int cantidad de widgets y por cada uno int largo y
@@ -49,14 +51,15 @@ import java.util.zip.InflaterInputStream
  */
 object NoteFormat {
     const val MAGIC = "TINTA"
-    const val VERSION = 10
+    const val VERSION = 11
 
     /**
-     * La versión con que se guarda una nota. La 10 sólo si las hojas van de costado (el cuaderno);
-     * la 9 si tiene líneas a rayas o de puntos; si no, la 8, que también abren las versiones
-     * anteriores de la app.
+     * La versión con que se guarda una nota. La 11 sólo si algún texto tiene letra propia o el
+     * recuadro lo recorta. La 10 si las hojas van de costado (el cuaderno). La 9 si tiene líneas
+     * a rayas o de puntos. Si no, la 8, que también abren las versiones anteriores de la app.
      */
-    fun versionFor(hasGroups: Boolean, horizontal: Boolean = false) = when {
+    fun versionFor(hasGroups: Boolean, horizontal: Boolean = false, richText: Boolean = false) = when {
+        richText -> 11
         horizontal -> 10
         hasGroups -> 9
         else -> 8
@@ -173,7 +176,7 @@ object NoteFormat {
         return RawStroke(tool, color, size, epsilon, left, top, right, bottom, inputs)
     }
 
-    fun writeElements(out: DataOutputStream, images: List<NoteImage>, texts: List<NoteText>, widgets: List<Widget>) {
+    fun writeElements(out: DataOutputStream, images: List<NoteImage>, texts: List<NoteText>, widgets: List<Widget>, richText: Boolean = false) {
         out.writeInt(images.size)
         for (i in images) {
             out.writeFloat(i.left)
@@ -195,6 +198,10 @@ object NoteFormat {
             val bytes = t.text.toByteArray(Charsets.UTF_8)
             out.writeInt(bytes.size)
             out.write(bytes)
+            if (richText) {
+                out.writeUTF(t.font)
+                out.writeByte(if (t.clip) 1 else 0)
+            }
         }
         out.writeInt(widgets.size)
         for (w in widgets) {
@@ -237,7 +244,10 @@ object NoteFormat {
             val h = input.readFloat()
             val size = input.readFloat()
             val color = input.readInt()
-            texts.add(NoteText(l, t, w, h, String(blob(input), Charsets.UTF_8), size, color))
+            val value = String(blob(input), Charsets.UTF_8)
+            val font = if (version >= 11) input.readUTF() else NoteText.DEFAULT_FONT
+            val clip = version >= 11 && input.readUnsignedByte() and 1 != 0
+            texts.add(NoteText(l, t, w, h, value, size, color, font, clip))
         }
         if (version < 4) return
         repeat(input.readInt()) {

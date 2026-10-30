@@ -133,7 +133,21 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
         /** Empezó otra captura o se borró la elegida: sacar sus opciones. */
         fun onCaptureCleared() = Unit
+
+        /** Se dibujó el recuadro donde va a escribirse con el teclado. */
+        fun onTextFrame(world: RectF) = Unit
+
+        /** Dos toques sobre un texto: editarlo. */
+        fun onTextDoubleTap(text: NoteText) = Unit
     }
+
+    /** Con la herramienta de texto: el próximo trazo dibuja el recuadro, no tinta. */
+    var placingText = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!value) cancelTextFrame()
+        }
 
     val camera = Camera(resources.displayMetrics.density)
     var listener: Listener? = null
@@ -282,7 +296,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 val added = strokes.flatMap { (id, s) ->
                     val p = strokePens.remove(id) ?: pen
                     // En modo oscuro el trazo en curso usa el color de pantalla; se guarda el real.
-                    val color = p.tool.storedColor(p.color)
+                    val color = p.tool.storedColor(p.color, p.opacity)
                     styled(InkStroke(p.tool, if (s.brush.colorIntArgb == color) s else s.copy(s.brush.copyWithColorIntArgb(color)), p.sensitivity), p.dash)
                 }
                 addFresh(added)
@@ -629,6 +643,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     private fun pointerDown(e: MotionEvent, i: Int) {
+        if (framePointer != NONE) return
         val id = e.getPointerId(i)
         val byPen = isPen(e, i)
         if (gesturePointer != NONE || zoomDragPointer != NONE) return
@@ -648,6 +663,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             }
         }
         if (penPointer == NONE) panelMaxX = Float.NEGATIVE_INFINITY
+        if (placingText && framePointer == NONE && penPointer == NONE && fingers.isEmpty() && gesturePointer == NONE && zoomDragPointer == NONE) {
+            if (byPen) lastPenSeen = e.eventTime
+            startTextFrame(e.getX(i), e.getY(i), id)
+            return
+        }
         // Con el lazo, lo elegido se arrastra con el lápiz o con un dedo.
         if (mode == Mode.LASSO && penPointer == NONE && fingers.isEmpty() && !wantsEraser(e, i) &&
             (byPen || e.eventTime - lastPenSeen > PALM_GRACE_MS)
@@ -726,6 +746,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     private fun move(e: MotionEvent) {
+        if (framePointer != NONE) {
+            val i = e.findPointerIndex(framePointer)
+            if (i >= 0) moveTextFrame(e.getX(i), e.getY(i))
+            return
+        }
         if (gesturePointer != NONE) {
             moveGesture(e)
             return
@@ -806,6 +831,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private fun pointerUp(e: MotionEvent, i: Int) {
         val id = e.getPointerId(i)
+        if (id == framePointer) {
+            endTextFrame(e.flags and MotionEvent.FLAG_CANCELED != 0)
+            return
+        }
         if (id == gesturePointer) {
             endGesture()
             return
@@ -819,7 +848,21 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 removeCallbacks(fingerHold)
                 tapPointer = NONE
                 val still = hypot(e.getX(i) - tapX, e.getY(i) - tapY) < TAP_SLOP * density
-                if (still && e.eventTime - tapAt < TAP_MS) mediaAt(camera.toWorldX(e.getX(i)), camera.toWorldY(e.getY(i)))?.let { listener?.onMediaTap(it) }
+                if (still && e.eventTime - tapAt < TAP_MS) {
+                    val wx = camera.toWorldX(e.getX(i))
+                    val wy = camera.toWorldY(e.getY(i))
+                    val hit = if (placingText) null else textAt(wx, wy)
+                    if (hit != null && hit === lastTextTap && e.eventTime - lastTextTapAt < DOUBLE_TAP_MS) {
+                        lastTextTap = null
+                        listener?.onTextDoubleTap(hit)
+                    } else {
+                        if (hit != null) {
+                            lastTextTap = hit
+                            lastTextTapAt = e.eventTime
+                        }
+                        mediaAt(wx, wy)?.let { listener?.onMediaTap(it) }
+                    }
+                }
             }
             val turning = flip != null && fingers.size >= 2
             fingers.remove(id)
@@ -856,12 +899,33 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             linePreview = null
             listener?.onMediaTap(tapped)
         }
-        penStroke?.let { strokeId ->
-            if (canceled) {
-                wet.cancelStroke(strokeId, e)
-                strokePens.remove(strokeId)
+        val textHit = textTapHit(e, i, canceled)
+        if (textHit != null) {
+            penStroke?.let {
+                wet.cancelStroke(it, e)
+                strokePens.remove(it)
+            }
+            penStroke = null
+            lineStart = null
+            linePreview = null
+            if (textHit === lastTextTap && e.eventTime - lastTextTapAt < DOUBLE_TAP_MS) {
+                lastTextTap = null
+                listener?.onTextDoubleTap(textHit)
             } else {
-                wet.finishStroke(e, id, strokeId)
+                lastTextTap = textHit
+                lastTextTapAt = e.eventTime
+                select(emptyList(), emptyList(), listOf(textHit))
+                listener?.onSelectionChanged()
+            }
+        } else {
+            if (!canceled && !penMoved && e.eventTime - penDownAt < TAP_MS) lastTextTap = null
+            penStroke?.let { strokeId ->
+                if (canceled) {
+                    wet.cancelStroke(strokeId, e)
+                    strokePens.remove(strokeId)
+                } else {
+                    wet.finishStroke(e, id, strokeId)
+                }
             }
         }
         lineStart?.let { start ->
@@ -890,6 +954,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private fun cancelAll(e: MotionEvent) {
         zoomDragPointer = NONE
+        cancelTextFrame()
         penInPanel = false
         useMainInput()
         removeCallbacks(hold)
@@ -1040,6 +1105,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         // Se movió: el reloj vuelve a empezar desde acá.
         holdX = sx
         holdY = sy
+        if (!penMoved && selection != null && mode == Mode.PEN) {
+            selection = null
+            listener?.onSelectionChanged()
+        }
         penMoved = true
         removeCallbacks(hold)
         if (holdForShapes && shape == null && penStroke != null) postDelayed(hold, SHAPE_HOLD_MS)
@@ -1094,7 +1163,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             // Puntos espaciados en el tiempo: así Ink no suaviza las esquinas.
             batch.add(InputToolType.STYLUS, pts[2 * k], pts[2 * k + 1], k * SHAPE_POINT_MS, pressure = pressure)
         }
-        return runCatching { InkStroke(p.tool, Stroke(p.tool.brush(p.color, p.size, epsilon(), p.sensitivity), batch), p.sensitivity) }.getOrNull()
+        return runCatching { InkStroke(p.tool, Stroke(p.tool.brush(p.color, p.size, epsilon(), p.sensitivity, p.opacity), batch), p.sensitivity) }.getOrNull()
     }
 
     private fun commitShape() {
@@ -1129,7 +1198,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             val f = k.toFloat() / n
             batch.add(InputToolType.STYLUS, start.x + (ex - start.x) * f, start.y + (ey - start.y) * f, k * 8L, pressure = 0.5f)
         }
-        return InkStroke(pen.tool, Stroke(pen.tool.brush(pen.color, pen.size, epsilon(), pen.sensitivity), batch), pen.sensitivity)
+        return InkStroke(pen.tool, Stroke(pen.tool.brush(pen.color, pen.size, epsilon(), pen.sensitivity, pen.opacity), batch), pen.sensitivity)
     }
 
     private fun commitLine() {
@@ -2414,6 +2483,75 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         listener?.onSelectionChanged()
     }
 
+    /** Pasa un rectángulo del mundo a la pantalla del lienzo. */
+    fun mapToScreen(world: RectF, out: RectF) {
+        camera.worldToScreen(Matrix()).mapRect(out, world)
+    }
+
+    fun textAt(x: Float, y: Float): NoteText? = texts.lastOrNull { Elements.textBounds(it).contains(x, y) }
+
+    private var framePointer = NONE
+    private var textFrame: RectF? = null
+    private var frameFromX = 0f
+    private var frameFromY = 0f
+    private var lastTextTap: NoteText? = null
+    private var lastTextTapAt = 0L
+
+    private fun textTapHit(e: MotionEvent, i: Int, canceled: Boolean): NoteText? {
+        if (canceled || placingText || mode != Mode.PEN || penMoved || shape != null) return null
+        if (e.eventTime - penDownAt >= TAP_MS) return null
+        return textAt(inX(e.getX(i)), inY(e.getY(i)))
+    }
+
+    private fun startTextFrame(sx: Float, sy: Float, pointer: Int) {
+        framePointer = pointer
+        frameFromX = camera.toWorldX(sx)
+        frameFromY = camera.toWorldY(sy)
+        textFrame = RectF(frameFromX, frameFromY, frameFromX, frameFromY)
+        dry.invalidate()
+    }
+
+    private fun moveTextFrame(sx: Float, sy: Float) {
+        val x = camera.toWorldX(sx)
+        val y = camera.toWorldY(sy)
+        textFrame?.set(min(frameFromX, x), min(frameFromY, y), max(frameFromX, x), max(frameFromY, y))
+        dry.invalidate()
+    }
+
+    private fun endTextFrame(canceled: Boolean) {
+        framePointer = NONE
+        val r = textFrame
+        textFrame = null
+        dry.invalidate()
+        if (canceled || r == null || !placingText) return
+        val minWorld = 28f * density / camera.scale.coerceAtLeast(0.01f)
+        val box = RectF(r)
+        if (box.width() < minWorld || box.height() < minWorld) {
+            val cx = box.centerX()
+            val cy = box.centerY()
+            box.set(cx - 110f, cy - 40f, cx + 110f, cy + 40f)
+        } else {
+            if (box.height() < 36f) {
+                val cy = box.centerY()
+                box.top = cy - 18f
+                box.bottom = cy + 18f
+            }
+            if (box.width() < 48f) {
+                val cx = box.centerX()
+                box.left = cx - 24f
+                box.right = cx + 24f
+            }
+        }
+        listener?.onTextFrame(box)
+    }
+
+    private fun cancelTextFrame() {
+        if (framePointer == NONE && textFrame == null) return
+        framePointer = NONE
+        textFrame = null
+        dry.invalidate()
+    }
+
     // --- Captura ---
 
     /** El rectángulo de la captura (del mundo): mientras se arrastra y mientras se eligen las opciones. */
@@ -2711,7 +2849,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     /** El color con que se ve el trazo en curso (en modo oscuro, el invertido). */
-    private fun displayColor() = Appearance.ink(pen.tool.storedColor(pen.color), pen.tool, dark)
+    private fun displayColor() = Appearance.ink(pen.tool.storedColor(pen.color, pen.opacity), pen.tool, dark)
 
     /** Precisión de la malla del trazo: medio píxel al zoom actual, nunca más de 0,1 dp. */
     private fun epsilon() = (0.5f / max(camera.scale, inScale)).coerceAtMost(0.1f)
@@ -2977,6 +3115,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             drawLasso(canvas)
             drawSelection(canvas)
             captureRect?.let { drawCapture(canvas, it, worldToScreen) }
+            textFrame?.let { drawTextFrame(canvas, it, worldToScreen) }
             if (drawLaser(canvas)) pending = true
             cursor?.let {
                 cursorPaint.color = if (dark) 0x99E0E0E0.toInt() else 0x99404040.toInt()
@@ -3131,6 +3270,29 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         private val captureScreen = RectF()
 
+        private val textFrameFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent and 0x00FFFFFF or 0x22000000 }
+        private val textFrameEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2 * density
+            color = accent
+        }
+
+        /** El recuadro del texto, mientras se arrastra. */
+        private fun drawTextFrame(canvas: Canvas, world: RectF, worldToScreen: Matrix) {
+            val r = RectF(world)
+            worldToScreen.mapRect(r)
+            canvas.drawRect(r, textFrameFill)
+            canvas.drawRect(r, textFrameEdge)
+            val c = min(12 * density, min(r.width(), r.height()) / 3f)
+            if (c <= 0f) return
+            for ((x, dx) in listOf(r.left to c, r.right to -c)) {
+                for ((y, dy) in listOf(r.top to c, r.bottom to -c)) {
+                    canvas.drawLine(x, y, x + dx, y, textFrameEdge)
+                    canvas.drawLine(x, y, x, y + dy, textFrameEdge)
+                }
+            }
+        }
+
         /** La captura: afuera oscurecido, el borde y las esquinas marcadas. */
         private fun drawCapture(canvas: Canvas, world: RectF, worldToScreen: Matrix) {
             val r = captureScreen
@@ -3254,6 +3416,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private companion object {
         const val NONE = -1
+        private const val DOUBLE_TAP_MS = 320L
 
         // Gestos sobre lo elegido.
         const val MOVE = 1

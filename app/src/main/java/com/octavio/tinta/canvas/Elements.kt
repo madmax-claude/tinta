@@ -11,6 +11,7 @@ import android.text.TextPaint
 import com.octavio.tinta.model.NoteImage
 import com.octavio.tinta.model.NoteText
 import com.octavio.tinta.model.Transform
+import com.octavio.tinta.ui.Fonts
 import java.io.File
 import java.util.WeakHashMap
 import kotlin.math.ceil
@@ -50,16 +51,19 @@ object Elements {
      * y pisaban lo de al lado, y se veían cortados donde terminaba la caja).
      */
     fun drawText(canvas: Canvas, text: NoteText, paint: TextPaint, color: Int = text.color) {
+        paint.typeface = Fonts.typeface(text.font)
         paint.color = color
         paint.textSize = text.size
+        val save = canvas.save()
+        if (text.clip) canvas.clipRect(text.left, text.top, text.left + text.width, text.top + text.height)
         if (!needsWrap(text, paint)) {
             text.text.split('\n').forEachIndexed { n, line ->
                 canvas.drawText(line, text.left, text.top + text.size * (1 + LINE * n), paint)
             }
+            canvas.restoreToCount(save)
             return
         }
         val layout = layout(text, paint)
-        val save = canvas.save()
         // La primera línea con la base donde estaba: a un tamaño de letra del borde de arriba.
         canvas.translate(text.left, text.top + text.size + paint.ascent())
         layout.draw(canvas)
@@ -89,6 +93,7 @@ object Elements {
     /** Ancho y alto de lo que ocupa el texto dibujado (con los renglones que pasan abajo). */
     private fun drawnSize(t: NoteText): FloatArray = synchronized(sizes) {
         sizes[t] ?: run {
+            measurePaint.typeface = Fonts.typeface(t.font)
             measurePaint.textSize = t.size
             val wrap = needsWrap(t, measurePaint)
             val lines = if (wrap) layout(t, measurePaint).lineCount else t.text.split('\n').size
@@ -106,6 +111,7 @@ object Elements {
     }
 
     fun textBounds(t: NoteText): RectF {
+        if (t.clip) return RectF(t.left, t.top, t.left + t.width, t.top + t.height)
         val d = drawnSize(t)
         return RectF(t.left, t.top, t.left + max(t.width, d[0]), t.top + max(max(t.height, t.size * LINE), d[1]))
     }

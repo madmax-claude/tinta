@@ -55,15 +55,21 @@ class PenButton(context: Context, private val dark: Boolean) : View(context) {
     override fun onDraw(canvas: Canvas) {
         val p = pen ?: return
         val cx = width / 2f
-        val cy = height / 2f
-        val r = context.dp(14f)
-        // El resaltador se muestra con su color pleno; la tinta, como se ve en la hoja.
-        val color = if (p.tool == Tool.HIGHLIGHTER) p.color else Appearance.ink(p.color, p.tool, dark)
+        val mark = p.straight || p.dash != com.octavio.tinta.model.Dash.SOLID
+        val r = context.dp(11f)
+        val cy = if (mark) height / 2f - context.dp(4f) else height / 2f
+        // El resaltador se muestra con su opacidad; la tinta, como se ve en la hoja.
+        val color = if (p.tool == Tool.HIGHLIGHTER) {
+            val a = (p.opacity.coerceIn(5, 100) * 255 / 100).coerceIn(1, 255)
+            (p.color and 0x00FFFFFF) or (a shl 24)
+        } else {
+            Appearance.ink(p.color, p.tool, dark)
+        }
         fill.color = color
         canvas.drawCircle(cx, cy, r, fill)
         canvas.drawCircle(cx, cy, r, edge)
-        // El dibujo, blanco o negro según cuán claro sea el color.
-        val onColor = if (ColorUtils.calculateLuminance(color) > 0.45) 0xDD000000.toInt() else 0xFFFFFFFF.toInt()
+        // El dibujo, blanco o negro según cuán claro sea el color (sin contar la transparencia).
+        val onColor = if (ColorUtils.calculateLuminance(color or 0xFF000000.toInt()) > 0.45) 0xDD000000.toInt() else 0xFFFFFFFF.toInt()
         icon?.let {
             val s = context.dp(9f).toInt()
             it.setTint(onColor)
@@ -73,7 +79,7 @@ class PenButton(context: Context, private val dark: Boolean) : View(context) {
         // Debajo, una raya si traza rectas; con su patrón si es a rayas o de puntos.
         if (p.straight || p.dash != com.octavio.tinta.model.Dash.SOLID) {
             bar.color = indicator
-            val y = cy + r + context.dp(8f)
+            val y = (cy + r + context.dp(3.5f)).coerceAtMost(height - context.dp(1.5f))
             val half = context.dp(if (p.dash == com.octavio.tinta.model.Dash.SOLID) 12f else 14f)
             val w = bar.strokeWidth
             bar.pathEffect = p.dash.lengths(w)?.let { l ->
@@ -81,7 +87,7 @@ class PenButton(context: Context, private val dark: Boolean) : View(context) {
             }
             canvas.drawLine(cx - half, y, cx + half, y, bar)
         }
-        if (isSelected) canvas.drawCircle(cx, cy, r + context.dp(4f), ring)
+        if (isSelected) canvas.drawCircle(cx, cy, r + context.dp(2.5f), ring)
     }
 
     companion object {

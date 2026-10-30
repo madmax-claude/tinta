@@ -2,6 +2,7 @@ package com.octavio.tinta.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.AudioManager
 import android.media.ToneGenerator
@@ -89,6 +90,15 @@ class TimerPanel(context: Context) : LinearLayout(context) {
 
     /** Terminó de moverlo; (fx, fy) es su posición como fracción del espacio libre. */
     var onMoved: ((Float, Float) -> Unit)? = null
+
+    private val blocked = ArrayList<RectF>()
+
+    /** La de herramientas y la de hojas: el reloj no puede quedarles encima. */
+    fun setBlocked(rects: List<RectF>) {
+        blocked.clear()
+        for (r in rects) blocked.add(RectF(r))
+        if (visibility == VISIBLE && width > 0) clamp(save = true)
+    }
 
     private val time = TextView(context)
 
@@ -271,10 +281,18 @@ class TimerPanel(context: Context) : LinearLayout(context) {
         clamp()
     }
 
-    private fun clamp() {
+    private fun clamp(save: Boolean = false) {
         val parent = parent as? ViewGroup ?: return
-        x = fx * (parent.width - width).coerceAtLeast(0)
-        y = fy * (parent.height - height).coerceAtLeast(0)
+        if (width <= 0 || parent.width <= 0) return
+        val rawX = fx * (parent.width - width).coerceAtLeast(0)
+        val rawY = fy * (parent.height - height).coerceAtLeast(0)
+        val pushed = Clearance.push(rawX, rawY, width.toFloat(), height.toFloat(), parent.width.toFloat(), parent.height.toFloat(), blocked)
+        x = pushed.first
+        y = pushed.second
+        if (save && (x != rawX || y != rawY)) {
+            rememberPosition(parent)
+            onMoved?.invoke(fx, fy)
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -310,8 +328,11 @@ class TimerPanel(context: Context) : LinearLayout(context) {
                     val dy = e.rawY - downY
                     if (!dragging && hypot(dx, dy) > slop) dragging = true
                     if (dragging) {
-                        x = (startX + dx).coerceIn(0f, (parent.width - width).coerceAtLeast(0).toFloat())
-                        y = (startY + dy).coerceIn(0f, (parent.height - height).coerceAtLeast(0).toFloat())
+                        val rawX = (startX + dx).coerceIn(0f, (parent.width - width).coerceAtLeast(0).toFloat())
+                        val rawY = (startY + dy).coerceIn(0f, (parent.height - height).coerceAtLeast(0).toFloat())
+                        val pushed = Clearance.push(rawX, rawY, width.toFloat(), height.toFloat(), parent.width.toFloat(), parent.height.toFloat(), blocked)
+                        x = pushed.first
+                        y = pushed.second
                         // Al día mientras se arrastra: si el panel cambia de tamaño en el medio
                         // (el número del reloj), se acomoda donde está y no donde estaba.
                         rememberPosition(parent)

@@ -28,7 +28,8 @@ object Fonts {
 
     private fun walk(view: View, face: Typeface) {
         when (view) {
-            is PenButton, is TabStrip -> Unit
+            // El lápiz se dibuja solo. El recuadro de texto elige su letra: no es la de la interfaz.
+            is PenButton, is TextBoxEditor -> Unit
             is TextView -> {
                 view.typeface = face
                 if (view is ViewGroup) for (i in 0 until view.childCount) walk(view.getChildAt(i), face)

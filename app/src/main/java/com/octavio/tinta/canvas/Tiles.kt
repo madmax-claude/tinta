@@ -67,6 +67,11 @@ class Tiles(private val density: Float) {
     private val tiles = HashMap<Long, Tile>()
     private var frame = 0L
 
+    /** Zona recién borrada o movida: mientras la baldosa no se regraba, ahí se esfuma en vez de vaciarse toda. */
+    private class Hole(val rect: RectF, val born: Long)
+
+    private val holes = ArrayList<Hole>()
+
     /** Escala en la que se pintan las baldosas ahora, y la anterior mientras se completa. */
     var level = NONE
         private set
@@ -105,6 +110,10 @@ class Tiles(private val density: Float) {
             if (!t.intersects(r)) continue
             t.dirty = true
             if (urgent && t.ready) t.urgent = true
+        }
+        if (urgent) {
+            if (holes.size >= 32) holes.removeAt(0)
+            holes.add(Hole(RectF(r), SystemClock.uptimeMillis()))
         }
     }
 
@@ -247,8 +256,9 @@ class Tiles(private val density: Float) {
             }
         }
         // Las que todavía están apareciendo también necesitan algo debajo.
-        val fading = wanted.any { it.fadeFrom != 0L && it.ix in ix0..ix1 && it.iy in iy0..iy1 }
-        incomplete = missing || fading
+        val appearing = wanted.any { it.fadeFrom != 0L && it.ix in ix0..ix1 && it.iy in iy0..iy1 }
+        incomplete = missing || appearing
+        var holeFade = false
 
         // Mientras faltan baldosas se ven, debajo, las de la escala anterior.
         val prev = previous
@@ -266,15 +276,55 @@ class Tiles(private val density: Float) {
         }
         val now = SystemClock.uptimeMillis()
         for (t in wanted) {
-            // Una baldosa urgente que todavía no se regrabó no se dibuja: si no, se sigue viendo
-            // la tinta ya borrada o lo que se está moviendo, hasta que el dedo se levanta.
-            if (!t.ready || (t.dirty && t.urgent)) continue
+            if (!t.ready) continue
+            // Urgente y todavía vieja: se deja lo de alrededor y el hueco se esfuma. Si se dibujara
+            // entera se vería la tinta ya borrada; si no se dibujara, parpadearía toda la baldosa.
+            if (t.dirty && t.urgent) {
+                if (drawStale(canvas, t, scale, tx, ty, now)) holeFade = true
+                continue
+            }
             fade(t, now)
             drawTile(canvas, t, scale, tx, ty)
         }
+        if (tiles.values.none { it.dirty && it.urgent }) holes.clear()
         // Las que quedaron lejos se sueltan: Android libera su capa al dejar de dibujarlas.
         drop { it.frame != frame }
-        return pending || fading
+        return pending || appearing || holeFade
+    }
+
+    /**
+     * Baldosa vieja con un hueco: afuera se ve como estaba y adentro la tinta se va en un instante,
+     * hasta que se regraba sin lo borrado.
+     */
+    private fun drawStale(canvas: Canvas, t: Tile, scale: Float, tx: Float, ty: Float, now: Long): Boolean {
+        val mine = holes.filter { t.intersects(it.rect) }
+        if (mine.isEmpty()) return false
+        val save = canvas.save()
+        for (h in mine) clipOut(canvas, h.rect, scale, tx, ty)
+        drawTile(canvas, t, scale, tx, ty)
+        canvas.restoreToCount(save)
+        var fading = false
+        val prev = t.node.alpha
+        for (h in mine) {
+            val a = (1f - (now - h.born) / HOLE_FADE_MS.toFloat()).coerceIn(0f, 1f)
+            if (a <= 0.02f) continue
+            fading = true
+            val s = canvas.save()
+            clipIn(canvas, h.rect, scale, tx, ty)
+            t.node.alpha = a * 0.7f
+            drawTile(canvas, t, scale, tx, ty)
+            t.node.alpha = prev
+            canvas.restoreToCount(s)
+        }
+        return fading
+    }
+
+    private fun clipOut(canvas: Canvas, r: RectF, scale: Float, tx: Float, ty: Float) {
+        canvas.clipOutRect(r.left * scale + tx, r.top * scale + ty, r.right * scale + tx, r.bottom * scale + ty)
+    }
+
+    private fun clipIn(canvas: Canvas, r: RectF, scale: Float, tx: Float, ty: Float) {
+        canvas.clipRect(r.left * scale + tx, r.top * scale + ty, r.right * scale + tx, r.bottom * scale + ty)
     }
 
     /** Ajusta la transparencia de una baldosa que está apareciendo. */
@@ -376,6 +426,9 @@ class Tiles(private val density: Float) {
 
         /** Baldosas urgentes que se regraban en un cuadro. El resto espera al siguiente. */
         private const val URGENT_CAP = 6
+
+        /** Cuánto tarda en irse la tinta de un hueco grande mientras la baldosa se repinta. */
+        private const val HOLE_FADE_MS = 180L
 
         /** Baldosas de más, como mucho, al adelantar la hoja de al lado. */
         private const val MAX_EXTRA = 8

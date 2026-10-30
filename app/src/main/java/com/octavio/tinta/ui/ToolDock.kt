@@ -65,7 +65,8 @@ class ToolDock(context: Context) : FrameLayout(context) {
     var onPlaced: (() -> Unit)? = null
 
     private val panel = LinearLayout(context)
-    private val tab = ImageView(context)
+    private val tab = FrameLayout(context)
+    private val tabIcon = ImageView(context)
     private val buttons = HashMap<Tool, View>()
 
     /** Las herramientas en el orden en que se ven. */
@@ -135,11 +136,14 @@ class ToolDock(context: Context) : FrameLayout(context) {
                 topMargin = context.dp(2f).toInt()
             })
         }
-        tab.setImageResource(R.drawable.ic_chevron)
-        tab.scaleType = ImageView.ScaleType.CENTER
+        // El fondo y la flecha van aparte: girar la flecha no puede dar vuelta la forma de la pestaña.
+        tabIcon.setImageResource(R.drawable.ic_chevron)
+        tabIcon.scaleType = ImageView.ScaleType.CENTER
+        tabIcon.contentDescription = "Mostrar las herramientas"
+        tabIcon.setOnClickListener { setState(right, collapsed = false) }
+        tab.addView(tabIcon, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         tab.elevation = context.dp(6f)
         tab.contentDescription = "Mostrar las herramientas"
-        tab.setOnClickListener { setState(right, collapsed = false) }
         dragVertically(tab)
         hide.setOnClickListener { setState(right, collapsed = true) }
         side.setOnClickListener { setState(!right, collapsed) }
@@ -211,9 +215,10 @@ class ToolDock(context: Context) : FrameLayout(context) {
         val bg = if (right) R.drawable.bg_dock_right else R.drawable.bg_dock_left
         panel.background = context.getDrawable(bg)
         tab.background = context.getDrawable(bg)
-        // La flecha apunta hacia donde se mueve: a esconderse o a salir.
+        // La flecha apunta hacia la hoja. La forma queda plana contra el borde y redonda hacia adentro.
         hide.rotation = if (right) 0f else 180f
-        tab.rotation = if (right) 180f else 0f
+        tab.rotation = 0f
+        tabIcon.rotation = if (right) 180f else 0f
         val side = if (right) Gravity.END else Gravity.START
         (tab.layoutParams as? LayoutParams)?.let {
             it.gravity = side or Gravity.CENTER_VERTICAL

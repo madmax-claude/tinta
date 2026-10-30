@@ -24,6 +24,15 @@ class ZoomBar(context: Context) : LinearLayout(context) {
     }
 
     var callbacks: Callbacks? = null
+    private val blocked = ArrayList<RectF>()
+    private var lastPanel: RectF? = null
+
+    /** La de herramientas y la de hojas: estos botones no pueden quedarles encima. */
+    fun setBlocked(rects: List<RectF>) {
+        blocked.clear()
+        for (r in rects) blocked.add(RectF(r))
+        if (visibility == VISIBLE) showFor(lastPanel)
+    }
 
     init {
         orientation = HORIZONTAL
@@ -54,6 +63,7 @@ class ZoomBar(context: Context) : LinearLayout(context) {
 
     /** Arriba a la derecha del panel (en coordenadas del padre), o escondida con null. */
     fun showFor(panel: RectF?) {
+        lastPanel = panel?.let { RectF(it) }
         if (panel == null) {
             visibility = GONE
             return
@@ -64,7 +74,10 @@ class ZoomBar(context: Context) : LinearLayout(context) {
             return
         }
         val parent = parent as? ViewGroup ?: return
-        x = (panel.right - width).coerceIn(0f, (parent.width - width).toFloat().coerceAtLeast(0f))
-        y = (panel.top - height - context.dp(6f)).coerceAtLeast(0f)
+        val rawX = (panel.right - width).coerceIn(0f, (parent.width - width).toFloat().coerceAtLeast(0f))
+        val rawY = (panel.top - height - context.dp(6f)).coerceAtLeast(0f)
+        val pushed = Clearance.push(rawX, rawY, width.toFloat(), height.toFloat(), parent.width.toFloat(), parent.height.toFloat(), blocked)
+        x = pushed.first
+        y = pushed.second
     }
 }

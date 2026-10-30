@@ -14,6 +14,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.octavio.tinta.ui.Fonts
@@ -59,7 +60,11 @@ fun View.padForSystemBars(fullscreen: () -> Boolean = { false }) {
             v.setTag(R.id.root, note)
             Diag.log(note)
         }
-        WindowInsetsCompat.CONSUMED
+        // Las barras ya se compensaron acá. El teclado sigue: el recuadro de texto tiene que subir.
+        WindowInsetsCompat.Builder(insets)
+            .setInsets(WindowInsetsCompat.Type.systemBars(), Insets.NONE)
+            .setInsets(WindowInsetsCompat.Type.displayCutout(), Insets.NONE)
+            .build()
     }
 }
 

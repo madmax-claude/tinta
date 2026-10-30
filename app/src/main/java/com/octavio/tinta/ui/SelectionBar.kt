@@ -40,6 +40,17 @@ class SelectionBar(context: Context) : LinearLayout(context) {
 
     private val color: ImageButton
     private val edit: ImageButton
+    private val blocked = ArrayList<RectF>()
+    private var lastTarget: RectF? = null
+    private var lastColor = false
+    private var lastEdit: Edit? = null
+
+    /** La de herramientas y la de hojas: la barra no puede quedarles encima. */
+    fun setBlocked(rects: List<RectF>) {
+        blocked.clear()
+        for (r in rects) blocked.add(RectF(r))
+        if (visibility == VISIBLE && lastTarget != null) showFor(lastTarget, lastColor, lastEdit)
+    }
 
     init {
         orientation = HORIZONTAL
@@ -74,6 +85,9 @@ class SelectionBar(context: Context) : LinearLayout(context) {
      * editar, o null si no aparece.
      */
     fun showFor(target: RectF?, canColor: Boolean, editAs: Edit? = null) {
+        lastTarget = target?.let { RectF(it) }
+        lastColor = canColor
+        lastEdit = editAs
         if (target == null) {
             visibility = GONE
             return
@@ -97,7 +111,9 @@ class SelectionBar(context: Context) : LinearLayout(context) {
         var top = target.top - height - gap
         if (top < margin) top = target.bottom + gap
         if (top + height > parent.height - margin) top = (parent.height - height - margin).coerceAtLeast(margin)
-        x = (target.centerX() - width / 2f).coerceIn(margin, (parent.width - width - margin).coerceAtLeast(margin))
-        y = top
+        val rawX = (target.centerX() - width / 2f).coerceIn(margin, (parent.width - width - margin).coerceAtLeast(margin))
+        val pushed = Clearance.push(rawX, top, width.toFloat(), height.toFloat(), parent.width.toFloat(), parent.height.toFloat(), blocked)
+        x = pushed.first
+        y = pushed.second
     }
 }

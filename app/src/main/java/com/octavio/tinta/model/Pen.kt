@@ -7,7 +7,7 @@ import org.json.JSONObject
  * Un lápiz de la barra: herramienta, color fijo y grosor (dp del mundo). Con `straight`, cada trazo
  * es una línea recta del punto donde se apoya al punto donde se levanta. `sensitivity`: cuánto
  * responde a la presión (sólo la pluma; ver [Sensitivity]). `dash`: línea continua, a rayas, de
- * puntos o raya y punto.
+ * puntos o raya y punto. `opacity`: porcentaje del resaltador (en las otras herramientas no cuenta).
  */
 data class Pen(
     val tool: Tool,
@@ -16,6 +16,7 @@ data class Pen(
     val straight: Boolean = false,
     val sensitivity: Int = Sensitivity.DEFAULT,
     val dash: Dash = Dash.SOLID,
+    val opacity: Int = Tool.DEFAULT_HIGHLIGHT_OPACITY,
 ) {
 
     fun toJson(): JSONObject = JSONObject()
@@ -25,6 +26,7 @@ data class Pen(
         .put("straight", straight)
         .put("sensitivity", sensitivity)
         .put("dash", dash.id)
+        .put("opacity", opacity)
 
     companion object {
         val DEFAULTS = listOf(
@@ -44,6 +46,7 @@ data class Pen(
                 o.optBoolean("straight"),
                 o.optInt("sensitivity", Sensitivity.DEFAULT).coerceIn(0, Sensitivity.MAX),
                 Dash.fromId(o.optInt("dash")),
+                o.optInt("opacity", Tool.DEFAULT_HIGHLIGHT_OPACITY).coerceIn(5, 100),
             )
         }
 

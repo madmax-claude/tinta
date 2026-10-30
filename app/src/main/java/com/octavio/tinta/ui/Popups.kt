@@ -113,6 +113,12 @@ object Popups {
         box.addView(seek)
         box.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, c.dp(44f).toInt()))
 
+        // Opacidad, sólo del resaltador.
+        val opacityLabel = label(c, "", 14f)
+        val opacitySeek = SeekBar(c).apply { max = 95 }
+        box.addView(opacityLabel, topMargin(c, 8f))
+        box.addView(opacitySeek)
+
         // Sensibilidad a la presión (sólo la pluma)
         val sensitivityBox = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
         val sensitivityLabel = label(c, "", 14f)
@@ -193,6 +199,11 @@ object Popups {
             for ((tool, v) in toolViews) v.isSelected = tool == pen.tool
             sizeLabel.text = "Grosor: ${"%.1f".format(pen.size)}"
             preview.pen = pen
+            val highlight = pen.tool == Tool.HIGHLIGHTER
+            opacityLabel.visibility = if (highlight) View.VISIBLE else View.GONE
+            opacitySeek.visibility = if (highlight) View.VISIBLE else View.GONE
+            opacityLabel.text = "Opacidad: ${pen.opacity}%"
+            opacitySeek.progress = (pen.opacity - 5).coerceIn(0, 95)
             sensitivityBox.visibility = if (pen.tool == Tool.PEN) View.VISIBLE else View.GONE
             sensitivityLabel.text = sensitivityText()
             sensitivitySeek.progress = pen.sensitivity
@@ -271,6 +282,17 @@ object Popups {
             override fun onStopTrackingTouch(s: SeekBar) = onChange(pen)
         })
         seek.progress = toProgress(pen)
+        opacitySeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, progress: Int, fromUser: Boolean) {
+                if (!fromUser || pen.tool != Tool.HIGHLIGHTER) return
+                pen = pen.copy(opacity = progress + 5)
+                opacityLabel.text = "Opacidad: ${pen.opacity}%"
+                preview.pen = pen
+            }
+
+            override fun onStartTrackingTouch(s: SeekBar) = Unit
+            override fun onStopTrackingTouch(s: SeekBar) = onChange(pen)
+        })
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
@@ -945,7 +967,7 @@ private class StrokePreview(context: Context, private val dark: Boolean) : View(
 
     override fun onDraw(canvas: Canvas) {
         val p = pen ?: return
-        val stored = p.tool.storedColor(p.color)
+        val stored = p.tool.storedColor(p.color, p.opacity)
         paint.color = Appearance.ink(stored, p.tool, dark)
         paint.strokeCap = if (p.tool == Tool.HIGHLIGHTER) Paint.Cap.SQUARE else Paint.Cap.ROUND
         // Al zoom normal: 1 dp del mundo = 1 dp en pantalla.
@@ -975,7 +997,7 @@ private class PressurePreview(context: Context, private val dark: Boolean) : Vie
 
     override fun onDraw(canvas: Canvas) {
         val p = pen ?: return
-        paint.color = Appearance.ink(p.tool.storedColor(p.color), p.tool, dark)
+        paint.color = Appearance.ink(p.tool.storedColor(p.color, p.opacity), p.tool, dark)
         val (low, high) = Sensitivity.range(p.sensitivity)
         val labelW = context.dp(44f)
         val left = labelW

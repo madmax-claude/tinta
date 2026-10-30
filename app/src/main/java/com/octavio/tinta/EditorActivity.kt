@@ -38,6 +38,7 @@ import com.octavio.tinta.canvas.NoteCanvasView
 import com.octavio.tinta.canvas.NoteCanvasView.Mode
 import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
+import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Clipboard
 import com.octavio.tinta.model.Find
 import com.octavio.tinta.model.Graph2D
@@ -80,6 +81,7 @@ import com.octavio.tinta.ui.RecorderBar
 import com.octavio.tinta.ui.SearchPanel
 import com.octavio.tinta.ui.SelectionBar
 import com.octavio.tinta.ui.TabStrip
+import com.octavio.tinta.ui.TextBoxEditor
 import com.octavio.tinta.ui.TimerPanel
 import com.octavio.tinta.ui.TimerState
 import com.octavio.tinta.ui.ToolDock
@@ -126,6 +128,9 @@ class EditorActivity :
     private lateinit var zoomBar: ZoomBar
     private lateinit var searchPanel: SearchPanel
     private lateinit var captureBar: CaptureBar
+    private lateinit var textEditor: TextBoxEditor
+    private var textTool = false
+    private var pendingTextBox: RectF? = null
 
     /** Lo marcado con la herramienta de captura (rectángulo del mundo), o null. */
     private var captureArea: RectF? = null
@@ -828,6 +833,7 @@ class EditorActivity :
         toolbar = FloatingToolbar(this, isDark)
         toolbar.callbacks = this
         toolbar.vertical = prefs.toolbarVertical
+        toolbar.placeAt(prefs.toolbarX, prefs.toolbarY)
         box.addView(toolbar, wrap())
         // Sólo si cambió el tamaño (pantalla dividida, girar): el listener también salta con cada
         // cambio de adentro (el reloj, cada segundo), y si no la barra volvía a donde estaba
@@ -904,6 +910,8 @@ class EditorActivity :
         box.addView(exitFullscreen, FrameLayout.LayoutParams(dp(44f).toInt(), dp(44f).toInt(), Gravity.TOP or Gravity.START).apply {
             setMargins(dp(10f).toInt(), dp(10f).toInt(), 0, 0)
         })
+        textEditor = TextBoxEditor(this)
+        box.addView(textEditor, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         pens = prefs.pens
         selected = prefs.selectedPen.coerceIn(0, pens.lastIndex)
         mode = prefs.mode.takeIf { it != Mode.LASER && it != Mode.CAPTURE } ?: Mode.PEN
@@ -926,12 +934,17 @@ class EditorActivity :
         canvas.pen = pens[selected]
         canvas.mode = mode
         toolbar.setPens(pens, selected, mode)
-        dock.setActive(if (mode == Mode.LASER) ToolDock.Tool.LASER else null)
+        dock.setActive(when {
+            textTool -> ToolDock.Tool.TEXT
+            mode == Mode.LASER -> ToolDock.Tool.LASER
+            else -> null
+        })
         prefs.selectedPen = selected
         prefs.mode = mode
     }
 
     override fun onPenClick(index: Int, button: View) {
+        leaveTextTool()
         if (index == selected && mode == Mode.PEN) {
             editPen(index, button) // segundo toque: opciones del lápiz
             return
@@ -1042,6 +1055,7 @@ class EditorActivity :
     }
 
     override fun onEraserClick(button: View) {
+        leaveTextTool()
         if (mode == Mode.ERASER) {
             Popups.eraser(
                 this, button, canvas.eraserRadius, canvas.holdToErase, canvas.partialErase,
@@ -1066,6 +1080,7 @@ class EditorActivity :
     }
 
     override fun onLassoClick(button: View) {
+        leaveTextTool()
         if (mode == Mode.LASSO) {
             Popups.lasso(
                 this, button, canvas.lassoFilter, canPaste = Clipboard.clip != null,
@@ -1112,21 +1127,37 @@ class EditorActivity :
         val bar = prefs.toolsColor
         toolbar.setIndicatorColor(if (bar != null) Chrome.ink(bar) else getColor(R.color.ink))
         pageStrip.setFont(prefs.font)
+        tabs.setFont(prefs.font)
         Fonts.apply(window.decorView, prefs.font)
     }
 
-    /** La barra de lápices no puede quedar encima de la de herramientas ni de la de hojas. */
+    /** Barras de un costado: la de lápices, la lupa, el reloj y lo elegido no pueden taparlas. */
+    private fun edgeObstacles(): List<RectF> {
+        val rects = ArrayList<RectF>()
+        if (::dock.isInitialized) dock.occupied()?.let(rects::add)
+        if (::pageStrip.isInitialized && pageStrip.visibility == View.VISIBLE) pageStrip.occupied()?.let(rects::add)
+        return rects
+    }
+
     private fun keepToolbarClear() {
         if (!::toolbar.isInitialized || !::dock.isInitialized) return
-        val rects = ArrayList<RectF>()
-        dock.occupied()?.let(rects::add)
-        if (::pageStrip.isInitialized && pageStrip.visibility == View.VISIBLE) pageStrip.occupied()?.let(rects::add)
+        val rects = edgeObstacles()
         toolbar.setBlocked(rects)
+        if (::selectionBar.isInitialized) selectionBar.setBlocked(rects)
+        if (::zoomBar.isInitialized) zoomBar.setBlocked(rects)
+        if (::timer.isInitialized) timer.setBlocked(rects)
+        if (::textEditor.isInitialized) textEditor.setBlocked(rects)
+    }
+
+    private fun leaveTextTool() {
+        textTool = false
+        if (::canvas.isInitialized) canvas.placingText = false
     }
 
     // --- Captura ---
 
     override fun onCaptureClick(button: View) {
+        leaveTextTool()
         if (mode == Mode.CAPTURE) {
             // Segundo toque: capturar todo lo que se ve, sin marcar.
             PopupMenu(this, button).apply {
@@ -1283,13 +1314,19 @@ class EditorActivity :
 
     override fun onDockTool(tool: ToolDock.Tool, button: View) {
         if (note == null) return
+        if (tool != ToolDock.Tool.TEXT) leaveTextTool()
         when (tool) {
             ToolDock.Tool.PAGES -> pagesMenu(button)
             ToolDock.Tool.ZOOM -> setZoom(!canvas.zoomOn)
             ToolDock.Tool.IMAGE -> launching {
                 pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
             }
-            ToolDock.Tool.TEXT -> askText(getString(R.string.add_text), "", multiline = true, onOk = ::addKeyboardText)
+            ToolDock.Tool.TEXT -> {
+                textTool = true
+                canvas.placingText = true
+                dock.setActive(ToolDock.Tool.TEXT)
+                hint("Dibujá el recuadro y escribí adentro")
+            }
             ToolDock.Tool.GRAPH2D -> {
                 val start = Graph2D(0f, 0f, 0f, 0f, listOf("x^2"), -5f, 5f, -5f, 5f, autoY = true, grid = true, color = widgetColor())
                 WidgetEditors.graph2d(this, start, isDark, isNew = true) { insertWidget(it, 600f, 420f) }
@@ -1547,33 +1584,65 @@ class EditorActivity :
         canvas.selectedImage?.let(::crop)
     }
 
-    /** Pone un texto escrito con el teclado en el centro de lo que se ve y lo deja elegido. */
-    private fun addKeyboardText(value: String) {
-        val size = 22f
-        val paint = Elements.newTextPaint().apply { textSize = size }
-        val lines = value.split('\n')
-        val width = lines.maxOf { paint.measureText(it) }.coerceAtLeast(size * 4) + size
-        val height = size * (1.25f * (lines.size - 1) + 1.3f)
-        val center = canvas.visibleCenter()
-        canvas.clearSelection()
-        mode = Mode.LASSO
-        applyTool()
-        canvas.insert(
-            emptyList(),
-            emptyList(),
-            listOf(NoteText(center.x - width / 2, center.y - height / 2, width, height, value, size, widgetColor())),
+    override fun onTextFrame(world: RectF) {
+        pendingTextBox = RectF(world)
+        canvas.placingText = false
+        val screen = RectF()
+        canvas.mapToScreen(world, screen)
+        val size = prefs.textSize.takeIf { it > 0f } ?: (world.height() * 0.42f).coerceIn(14f, 28f)
+        openTextEditor(screen, "", size, prefs.textFont, widgetColor(), newBox = true)
+    }
+
+    override fun onTextDoubleTap(text: NoteText) {
+        canvas.select(emptyList(), emptyList(), listOf(text))
+        onSelectionChanged()
+        editSelectedText()
+    }
+
+    /** Escribir o cambiar un texto adentro de su recuadro. */
+    private fun openTextEditor(screen: RectF, initial: String, size: Float, font: String, color: Int, newBox: Boolean) {
+        textEditor.open(
+            screen, initial, size, font, Appearance.ink(color, Tool.PEN, isDark), canvas.camera.scale, edgeObstacles(),
+            onDone = { value, chosenSize, chosenFont ->
+                prefs.textSize = chosenSize
+                prefs.textFont = chosenFont
+                if (newBox) {
+                    val box = pendingTextBox
+                    if (box != null) {
+                        canvas.insert(
+                            emptyList(), emptyList(),
+                            listOf(NoteText(box.left, box.top, box.width(), box.height(), value, chosenSize, color, chosenFont, clip = true)),
+                        )
+                    }
+                    pendingTextBox = null
+                    textTool = false
+                    mode = Mode.LASSO
+                    applyTool()
+                } else {
+                    val current = canvas.selectedText
+                    if (current != null) {
+                        canvas.replaceSelectedText(
+                            NoteText(current.left, current.top, current.width, current.height, value, chosenSize, current.color, chosenFont, current.clip),
+                        )
+                    }
+                    if (textTool) canvas.placingText = true
+                }
+            },
+            onCancel = {
+                pendingTextBox = null
+                if (textTool) canvas.placingText = true
+            },
         )
     }
 
     private fun editSelectedText() {
         val current = canvas.selectedText ?: return
-        askText(getString(R.string.add_text), current.text, multiline = true) { value ->
-            val paint = Elements.newTextPaint().apply { textSize = current.size }
-            val lines = value.split('\n')
-            val width = lines.maxOf { paint.measureText(it) }.coerceAtLeast(current.size * 4) + current.size
-            val height = current.size * (1.25f * (lines.size - 1) + 1.3f)
-            canvas.replaceSelectedText(NoteText(current.left, current.top, width, height, value, current.size, current.color))
-        }
+        canvas.placingText = false
+        val world = RectF(current.left, current.top, current.left + current.width, current.top + current.height)
+        val screen = RectF()
+        canvas.mapToScreen(world, screen)
+        pendingTextBox = null
+        openTextEditor(screen, current.text, current.size, current.font, current.color, newBox = false)
     }
 
     override fun onStickerSelection() {

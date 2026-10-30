@@ -148,6 +148,15 @@ class Prefs(context: Context) {
         get() = p.getBoolean("toolbarVertical", false)
         set(v) = p.edit { putBoolean("toolbarVertical", v) }
 
+    /** Letra y tamaño (dp del mundo) del último texto escrito con el teclado. 0: según el recuadro. */
+    var textFont: String
+        get() = p.getString("textFont", "sans") ?: "sans"
+        set(v) = p.edit { putString("textFont", v) }
+
+    var textSize: Float
+        get() = p.getFloat("textSize", 0f)
+        set(v) = p.edit { putFloat("textSize", v) }
+
     /** Pestañas abiertas en la ventana `slot` (ver [Tabs]). */
     fun tabs(slot: Int): List<String> = p.getString("tabs$slot", "").orEmpty().split(',').filter { it.isNotBlank() }
 

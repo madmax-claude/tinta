@@ -76,7 +76,10 @@ class NoteImage(
     fun withFile(f: File) = NoteImage(left, top, width, height, rotation, f, locked)
 }
 
-/** Cuadro de texto (desde Jnotes). Se dibuja encima de la tinta, como en Jnotes; no gira. */
+/**
+ * Cuadro de texto. Se dibuja encima de la tinta y no gira. `font` es el id de la letra (sans, serif…).
+ * Con `clip`, lo que no entra en el recuadro no se dibuja: el recuadro es el límite.
+ */
 class NoteText(
     val left: Float,
     val top: Float,
@@ -85,10 +88,16 @@ class NoteText(
     val text: String,
     val size: Float,
     val color: Int,
+    val font: String = DEFAULT_FONT,
+    val clip: Boolean = false,
 ) {
     fun transformed(t: Transform, color: Int = this.color): NoteText {
         val r = Transform.upright(t, left, top, width, height)
-        return NoteText(r[0], r[1], r[2], r[3], text, size * t.a, color)
+        return NoteText(r[0], r[1], r[2], r[3], text, size * t.a, color, font, clip)
+    }
+
+    companion object {
+        const val DEFAULT_FONT = "sans"
     }
 }
 

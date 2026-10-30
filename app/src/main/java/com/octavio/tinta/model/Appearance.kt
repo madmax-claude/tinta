@@ -5,7 +5,7 @@ package com.octavio.tinta.model
  * En modo oscuro, un color que ya se lee sobre el papel oscuro (los claros) queda igual; los que
  * no (los oscuros) se invierten conservando el tono, así el negro se ve blanco y el azul marino,
  * celeste. Si aun así no se leyera, se aclara hasta que se lea. Los resaltadores mantienen el color
- * con un poco más de opacidad.
+ * y la opacidad elegida.
  */
 object Appearance {
     /** El papel en modo oscuro (el mismo que `Paper.DARK`). */
@@ -15,8 +15,7 @@ object Appearance {
     private const val READABLE = 4.5
 
     fun ink(color: Int, tool: Tool, dark: Boolean): Int {
-        if (!dark) return color
-        if (tool == Tool.HIGHLIGHTER) return (color and 0x00FFFFFF) or DARK_HIGHLIGHT_ALPHA
+        if (!dark || tool == Tool.HIGHLIGHTER) return color
         val alpha = (color ushr 24) and 0xFF
         val opaque = color or 0xFF000000.toInt()
         if (readable(opaque)) return color
@@ -44,6 +43,4 @@ object Appearance {
         val mirrored = Colors.fromHsl(hsl)
         return if (!readable(mirrored)) mirrored else shown or 0xFF000000.toInt()
     }
-
-    private const val DARK_HIGHLIGHT_ALPHA = 0x99000000.toInt()
 }

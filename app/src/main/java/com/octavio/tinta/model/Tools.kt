@@ -95,16 +95,24 @@ enum class Tool(val id: Int, val label: String, val minSize: Float, val maxSize:
     val colors: IntArray
         get() = if (this == HIGHLIGHTER) HIGHLIGHT_COLORS else INK_COLORS
 
-    fun brush(color: Int, size: Float, epsilon: Float, sensitivity: Int = Sensitivity.DEFAULT): Brush =
-        Brush.createWithColorIntArgb(family(sensitivity), storedColor(color), size, epsilon)
+    fun brush(color: Int, size: Float, epsilon: Float, sensitivity: Int = Sensitivity.DEFAULT, opacity: Int = DEFAULT_HIGHLIGHT_OPACITY): Brush =
+        Brush.createWithColorIntArgb(family(sensitivity), storedColor(color, opacity), size, epsilon)
 
-    /** El resaltador guarda su color ya transparente. */
-    fun storedColor(color: Int) = if (this == HIGHLIGHTER) (color and 0x00FFFFFF) or HIGHLIGHT_ALPHA else color
+    /**
+     * El resaltador guarda su color ya transparente. `opacity` es un porcentaje (la de siempre, 40,
+     * es el alfa 0x66 de antes).
+     */
+    fun storedColor(color: Int, opacity: Int = DEFAULT_HIGHLIGHT_OPACITY): Int {
+        if (this != HIGHLIGHTER) return color
+        val a = (opacity.coerceIn(5, 100) * 255 / 100).coerceIn(1, 255)
+        return (color and 0x00FFFFFF) or (a shl 24)
+    }
 
     companion object {
         fun fromId(id: Int): Tool = entries.firstOrNull { it.id == id } ?: PEN
 
-        private const val HIGHLIGHT_ALPHA = 0x66000000
+        /** Porcentaje de opacidad con el que sale un resaltador nuevo. */
+        const val DEFAULT_HIGHLIGHT_OPACITY = 40
 
         val INK_COLORS = intArrayOf(
             0xFF1F1F1F.toInt(), // negro

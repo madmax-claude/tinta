@@ -82,7 +82,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     init {
         background = context.getDrawable(R.drawable.bg_toolbar)
         elevation = context.dp(6f)
-        val pad = context.dp(4f).toInt()
+        val pad = context.dp(3f).toInt()
         setPadding(pad, pad, pad, pad)
         gravity = android.view.Gravity.CENTER
 
@@ -119,7 +119,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     private fun button(icon: Int, description: String) = ImageButton(context).apply {
         setImageResource(icon)
         background = context.getDrawable(R.drawable.bg_tool)
-        val p = context.dp(10f).toInt()
+        val p = context.dp(7f).toInt()
         setPadding(p, p, p, p)
         scaleType = ImageView.ScaleType.FIT_CENTER
         contentDescription = description
@@ -186,14 +186,14 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     }
 
     private fun itemParams(): LayoutParams {
-        val s = context.dp(46f).toInt()
+        val s = context.dp(36f).toInt()
         return LayoutParams(s, s)
     }
 
-    /** Un poco más alto, para la raya de línea recta debajo del círculo. */
+    /** La raya de línea recta entra en el mismo alto que el resto de los botones. */
     private fun penParams(): LayoutParams {
-        val s = context.dp(46f).toInt()
-        return LayoutParams(s, context.dp(58f).toInt())
+        val s = context.dp(36f).toInt()
+        return LayoutParams(s, s)
     }
 
     private fun applyOrientation() {
@@ -201,7 +201,7 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
         pensBox.orientation = orientation
         for (v in listOf(grip, add, eraser, lasso, capture, undo, redo)) v.layoutParams = itemParams()
         for (b in penButtons) b.layoutParams = penParams()
-        val long = context.dp(28f).toInt()
+        val long = context.dp(20f).toInt()
         val thin = context.dp(1f).toInt()
         val margin = context.dp(6f).toInt()
         for (d in dividers) {
@@ -219,11 +219,16 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     fun placeAt(fx: Float, fy: Float) {
         this.fx = fx.coerceIn(0f, 1f)
         this.fy = fy.coerceIn(0f, 1f)
+        positioned = true
         clampToParent()
     }
 
+    /** True después de [placeAt]: antes, un choque no puede pisar la fracción guardada. */
+    private var positioned = false
+
     private fun clampToParent() {
         val parent = parent as? ViewGroup ?: return
+        if (!positioned || width <= 0 || parent.width <= 0) return
         val maxX = (parent.width - width).coerceAtLeast(0).toFloat()
         val maxY = (parent.height - height).coerceAtLeast(0).toFloat()
         resolve(fx * maxX, fy * maxY, notify = false)
@@ -232,6 +237,8 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     /** Deja (desiredX, desiredY) dentro del padre y fuera de [blocked]. */
     private fun resolve(desiredX: Float, desiredY: Float, notify: Boolean) {
         val parent = parent as? View ?: return
+        // Sin medir, la fracción se iría a cero y la barra saltaría a la esquina al cambiar de modo.
+        if (!positioned || !isLaidOut || width <= 0 || parent.width <= 0) return
         val maxX = (parent.width - width).coerceAtLeast(0).toFloat()
         val maxY = (parent.height - height).coerceAtLeast(0).toFloat()
         var nx = desiredX.coerceIn(0f, maxX)

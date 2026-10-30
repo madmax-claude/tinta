@@ -1,6 +1,7 @@
 package com.octavio.tinta
 
 import com.octavio.tinta.model.Background
+import com.octavio.tinta.model.NoteText
 import com.octavio.tinta.model.PageLayout
 import com.octavio.tinta.model.PageSize
 import com.octavio.tinta.model.Viewport
@@ -12,6 +13,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.File
 import java.io.IOException
 
 class NoteFormatTest {
@@ -136,8 +138,27 @@ class NoteFormatTest {
         assertEquals(9, NoteFormat.versionFor(hasGroups = true))
         assertEquals(10, NoteFormat.versionFor(hasGroups = false, horizontal = true))
         assertEquals(10, NoteFormat.versionFor(hasGroups = true, horizontal = true))
+        assertEquals(11, NoteFormat.versionFor(hasGroups = false, richText = true))
+        assertEquals(11, NoteFormat.versionFor(hasGroups = true, horizontal = true, richText = true))
         val header = NoteFormat.Header("Vieja", Background.GRID, 1L, 2L, Viewport(), 0, version = 8)
         val bytes = ByteArrayOutputStream().also { buf -> DataOutputStream(buf).use { NoteFormat.writeHeader(it, header) } }.toByteArray()
         assertEquals(8, DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readHeader(it) }.version)
+    }
+
+    @Test
+    fun textWithItsOwnFontRoundTrips() {
+        val text = NoteText(1f, 2f, 100f, 40f, "Hola", 18f, 0xFF112233.toInt(), "serif", clip = true)
+        val bytes = ByteArrayOutputStream().also { buf ->
+            DataOutputStream(buf).use { NoteFormat.writeElements(it, emptyList(), listOf(text), emptyList(), richText = true) }
+        }.toByteArray()
+        val texts = mutableListOf<NoteText>()
+        DataInputStream(ByteArrayInputStream(bytes)).use {
+            NoteFormat.readElements(it, 11, File("."), mutableListOf(), texts, mutableListOf()) { error("sin imagen") }
+        }
+        val back = texts.single()
+        assertEquals("Hola", back.text)
+        assertEquals("serif", back.font)
+        assertEquals(true, back.clip)
+        assertEquals(18f, back.size)
     }
 }

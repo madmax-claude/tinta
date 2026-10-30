@@ -28,6 +28,16 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
     }
 
     var callbacks: Callbacks? = null
+    private var fontId: String? = null
+    private var lastTabs: List<Pair<String, String>> = emptyList()
+    private var lastActive: String? = null
+
+    /** La letra de las pestañas, la misma de las herramientas y del menú. */
+    fun setFont(id: String?) {
+        if (fontId == id) return
+        fontId = id
+        if (lastTabs.isNotEmpty()) setTabs(lastTabs, lastActive)
+    }
     private val row = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
@@ -45,6 +55,8 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
 
     /** `tabs`: (id, título) en orden. */
     fun setTabs(tabs: List<Pair<String, String>>, active: String?) {
+        lastTabs = tabs
+        lastActive = active
         row.removeAllViews()
         var activeView: View? = null
         for ((id, title) in tabs) {
@@ -58,6 +70,7 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
                 setPadding(p, 0, context.dp(2f).toInt(), 0)
                 addView(TextView(context).apply {
                     text = title
+                    typeface = Fonts.typeface(fontId)
                     textSize = if (id == active) 16f else 14f
                     val under = if (id == active) activeColor ?: barColor else barColor
                     val normal = context.getColor(if (id == active) R.color.ink else R.color.muted)
