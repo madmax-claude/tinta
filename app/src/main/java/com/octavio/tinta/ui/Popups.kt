@@ -847,6 +847,7 @@ object Popups {
         val top = (bars?.top ?: 0) + margin
         val bottom = root.height - (bars?.bottom ?: 0) - margin
         val width = c.dp(widthDp).toInt().coerceAtMost(root.width - 2 * margin)
+        Fonts.apply(content, com.octavio.tinta.Prefs(activity).font)
         content.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED)
         val height = content.measuredHeight.coerceAtMost((bottom - top).coerceAtLeast(c.dp(120f).toInt()))
         val scroll = ScrollView(c).apply {

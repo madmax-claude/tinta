@@ -37,6 +37,9 @@
     <string name="settings">Configuración</string>
     <string name="help_messages">Mensajes de ayuda</string>
     <string name="colors">Colores</string>
+    <string name="font">Letras</string>
+    <string name="font_hint">La letra de las herramientas, de las hojas y del menú.</string>
+    <string name="add_text">Escribir</string>
     <string name="export">Exportar…</string>
     <string name="exporting">Exportando…</string>
     <string name="color_top_bar">Barra de arriba (pestañas y buscador)</string>

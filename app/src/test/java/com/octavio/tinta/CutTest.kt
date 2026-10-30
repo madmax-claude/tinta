@@ -58,6 +58,20 @@ class CutTest {
     }
 
     @Test
+    fun aHugeGapDoesNotExplode() {
+        val huge = Cut.densify(
+            listOf(Cut.Point(0f, 0f, 0f, 0.5f, -1f, -1f), Cut.Point(1_000_000f, 0f, 1f, 0.5f, -1f, -1f)),
+            0.01f,
+        )
+        assertTrue(huge.size <= 513)
+        val broken = Cut.densify(
+            listOf(Cut.Point(0f, 0f, 0f, 0.5f, -1f, -1f), Cut.Point(Float.POSITIVE_INFINITY, 0f, 1f, 0.5f, -1f, -1f)),
+            0.3f,
+        )
+        assertEquals(2, broken.size)
+    }
+
+    @Test
     fun insideLeavesWholeStrokesAlone() {
         assertNull(Cut.inside(line(10f, 90f), 0f, -10f, 100f, 10f, 2f))
         // Todo afuera: no queda nada.

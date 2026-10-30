@@ -2,6 +2,7 @@ package com.octavio.tinta.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -14,6 +15,7 @@ import com.octavio.tinta.canvas.NoteCanvasView
 import com.octavio.tinta.dp
 import com.octavio.tinta.tip
 import com.octavio.tinta.model.Pen
+import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
@@ -65,6 +67,11 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     /** Posición como fracción del espacio libre, para que sobreviva a girar la tablet. */
     private var fx = 0.5f
     private var fy = 0f
+
+    /** Zonas de las otras barras, en coordenadas del mismo padre: no se puede solapar. */
+    private val blocked = ArrayList<RectF>()
+
+    private var indicator = context.getColor(R.color.ink)
 
     var vertical = false
         set(value) {
@@ -123,11 +130,12 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
         while (penButtons.size > pens.size) pensBox.removeView(penButtons.removeAt(penButtons.lastIndex))
         while (penButtons.size < pens.size) {
             val b = PenButton(context, dark)
+            b.indicator = indicator
             val index = penButtons.size
             b.setOnClickListener { callbacks?.onPenClick(index, it) }
             penOrder.attach(b)
             penButtons.add(b)
-            pensBox.addView(b, itemParams())
+            pensBox.addView(b, penParams())
         }
         pens.forEachIndexed { i, p ->
             penButtons[i].pen = p
@@ -158,16 +166,41 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
         redo.alpha = if (canRedo) 1f else 0.35f
     }
 
+    /** El color de la raya que marca la línea recta, el mismo de los íconos de esta barra. */
+    fun setIndicatorColor(color: Int) {
+        indicator = color
+        for (b in penButtons) b.indicator = color
+    }
+
+    /**
+     * Rectángulos (del padre) que esta barra no puede tapar: la de herramientas y la de hojas.
+     * Si quedó encima, se corre al lugar libre más cercano.
+     */
+    fun setBlocked(rects: List<RectF>) {
+        blocked.clear()
+        for (r in rects) blocked.add(RectF(r))
+        val parent = parent as? View ?: return
+        val maxX = (parent.width - width).coerceAtLeast(0).toFloat()
+        val maxY = (parent.height - height).coerceAtLeast(0).toFloat()
+        resolve(fx * maxX, fy * maxY, notify = true)
+    }
+
     private fun itemParams(): LayoutParams {
         val s = context.dp(46f).toInt()
         return LayoutParams(s, s)
+    }
+
+    /** Un poco más alto, para la raya de línea recta debajo del círculo. */
+    private fun penParams(): LayoutParams {
+        val s = context.dp(46f).toInt()
+        return LayoutParams(s, context.dp(58f).toInt())
     }
 
     private fun applyOrientation() {
         orientation = if (vertical) VERTICAL else HORIZONTAL
         pensBox.orientation = orientation
         for (v in listOf(grip, add, eraser, lasso, capture, undo, redo)) v.layoutParams = itemParams()
-        for (b in penButtons) b.layoutParams = itemParams()
+        for (b in penButtons) b.layoutParams = penParams()
         val long = context.dp(28f).toInt()
         val thin = context.dp(1f).toInt()
         val margin = context.dp(6f).toInt()
@@ -191,10 +224,44 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
 
     private fun clampToParent() {
         val parent = parent as? ViewGroup ?: return
-        val freeX = (parent.width - width).coerceAtLeast(0)
-        val freeY = (parent.height - height).coerceAtLeast(0)
-        x = fx * freeX
-        y = fy * freeY
+        val maxX = (parent.width - width).coerceAtLeast(0).toFloat()
+        val maxY = (parent.height - height).coerceAtLeast(0).toFloat()
+        resolve(fx * maxX, fy * maxY, notify = false)
+    }
+
+    /** Deja (desiredX, desiredY) dentro del padre y fuera de [blocked]. */
+    private fun resolve(desiredX: Float, desiredY: Float, notify: Boolean) {
+        val parent = parent as? View ?: return
+        val maxX = (parent.width - width).coerceAtLeast(0).toFloat()
+        val maxY = (parent.height - height).coerceAtLeast(0).toFloat()
+        var nx = desiredX.coerceIn(0f, maxX)
+        var ny = desiredY.coerceIn(0f, maxY)
+        var guard = 0
+        while (guard < 8) {
+            guard++
+            val hit = blocked.firstOrNull { nx + width > it.left && nx < it.right && ny + height > it.top && ny < it.bottom } ?: break
+            val pushes = listOf(
+                -((nx + width) - hit.left) to 0f,
+                (hit.right - nx) to 0f,
+                0f to -((ny + height) - hit.top),
+                0f to (hit.bottom - ny),
+            )
+            val (dx, dy) = pushes.minBy { (dx, dy) ->
+                val x2 = (nx + dx).coerceIn(0f, maxX)
+                val y2 = (ny + dy).coerceIn(0f, maxY)
+                abs(nx + dx - x2) + abs(ny + dy - y2) + hypot(dx, dy)
+            }
+            nx = (nx + dx).coerceIn(0f, maxX)
+            ny = (ny + dy).coerceIn(0f, maxY)
+        }
+        x = nx
+        y = ny
+        val nfx = if (maxX > 0f) nx / maxX else 0f
+        val nfy = if (maxY > 0f) ny / maxY else 0f
+        val moved = abs(nfx - fx) > 0.001f || abs(nfy - fy) > 0.001f
+        fx = nfx
+        fy = nfy
+        if (notify && moved) callbacks?.onMoved(fx, fy)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -233,11 +300,9 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
                         grip.removeCallbacks(longPress)
                     }
                     if (dragging) {
-                        x = (startX + dx).coerceIn(0f, (parent.width - width).coerceAtLeast(0).toFloat())
-                        y = (startY + dy).coerceIn(0f, (parent.height - height).coerceAtLeast(0).toFloat())
-                        // Al día mientras se arrastra, por si algo la vuelve a acomodar en el medio.
-                        fx = x / (parent.width - width).coerceAtLeast(1)
-                        fy = y / (parent.height - height).coerceAtLeast(1)
+                        val maxX = (parent.width - width).coerceAtLeast(0).toFloat()
+                        val maxY = (parent.height - height).coerceAtLeast(0).toFloat()
+                        resolve((startX + dx).coerceIn(0f, maxX), (startY + dy).coerceIn(0f, maxY), notify = false)
                     }
                 }
                 MotionEvent.ACTION_UP -> {

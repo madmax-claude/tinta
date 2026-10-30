@@ -17,6 +17,7 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
@@ -35,6 +36,7 @@ import com.octavio.tinta.model.Find
 import com.octavio.tinta.model.Note
 import com.octavio.tinta.model.NoteInfo
 import com.octavio.tinta.storage.CloudBackup
+import com.octavio.tinta.ui.Fonts
 import com.octavio.tinta.storage.HandText
 import com.octavio.tinta.storage.Imports
 import com.octavio.tinta.storage.JnotesBatch
@@ -301,6 +303,7 @@ class MainActivity : TintaActivity() {
                 for (id in listOf(R.id.import_jnotes, R.id.new_note)) Chrome.contrast(findViewById(id), c)
             }
         }
+        Fonts.apply(window.decorView, prefs.font)
     }
 
     // --- Configuración ---
@@ -327,6 +330,41 @@ class MainActivity : TintaActivity() {
             textSize = 13f
             setTextColor(getColor(R.color.muted))
             setPadding(0, dp(4f).toInt(), dp(56f).toInt(), 0)
+        })
+        box.addView(TextView(this).apply {
+            text = getString(R.string.font)
+            textSize = 16f
+            setTextColor(getColor(R.color.ink))
+            setPadding(0, dp(20f).toInt(), 0, 0)
+        })
+        box.addView(TextView(this).apply {
+            text = getString(R.string.font_hint)
+            textSize = 13f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(4f).toInt(), 0, dp(8f).toInt())
+        })
+        val fontChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (f in Fonts.Family.entries) {
+            fontChips.addView(TextView(this).apply {
+                text = f.label
+                textSize = 15f
+                typeface = Fonts.typeface(f.id)
+                setTextColor(getColor(R.color.ink))
+                background = getDrawable(R.drawable.bg_tool)
+                val p = dp(12f).toInt()
+                setPadding(p, dp(8f).toInt(), p, dp(8f).toInt())
+                isSelected = prefs.font == f.id
+                setOnClickListener {
+                    prefs.font = f.id
+                    for (i in 0 until fontChips.childCount) fontChips.getChildAt(i).isSelected = fontChips.getChildAt(i) === this
+                }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = dp(6f).toInt()
+            })
+        }
+        box.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(fontChips)
         })
         // Colores de la interfaz.
         box.addView(TextView(this).apply {
@@ -437,6 +475,7 @@ class MainActivity : TintaActivity() {
             newFolder()
         }
         menuColor?.let { Chrome.contrast(foldersBox, it) }
+        Fonts.apply(foldersBox, prefs.font)
     }
 
     /** Color de las partes de la ruta que llevan a otra carpeta (con un fondo oscuro, más claro). */
@@ -991,6 +1030,9 @@ class MainActivity : TintaActivity() {
 
             fun bind(f: Library.Folder) {
                 val lib = store.library
+                val face = Fonts.typeface(prefs.font)
+                title.typeface = face
+                meta.typeface = face
                 title.text = f.name
                 val inside = lib.subtree(f.id)
                 val n = notes.count { it.folder in inside }
@@ -1023,6 +1065,9 @@ class MainActivity : TintaActivity() {
             }
 
             fun bind(info: NoteInfo) {
+                val face = Fonts.typeface(prefs.font)
+                title.typeface = face
+                meta.typeface = face
                 title.text = info.title
                 val ago = DateUtils.getRelativeTimeSpanString(info.modified, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
                 val where = if (folder == null) pathName(info.folder) else null

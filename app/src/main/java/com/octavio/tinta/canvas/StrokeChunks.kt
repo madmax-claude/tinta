@@ -100,21 +100,18 @@ class StrokeChunks {
             if (!sameMembers(c)) {
                 val first = c.members.isEmpty() && !c.recorded && !opened
                 val had = c.recorded
-                val old = if (had) RectF(c.recordedBounds) else null
+                // Sólo la caja de los trazos que entran o salen. La caja de toda la tanda (hasta
+                // 64 trazos) marcaba urgentes todas las baldosas de esa zona y la goma se trababa.
+                val changed = if (had || opened) changedBounds(c.members, c.next) else null
                 c.members = c.next.also { c.next = c.members }
                 c.contentDirty = !first
                 updateBounds(c)
                 rootDirty = true
-                if (old != null) {
-                    // Aunque queden otros trazos, lo borrado tiene que salir de las baldosas ya:
-                    // si la caja nueva no toca la vista, nadie volvería a grabar esta tanda y la
-                    // tinta borrada se quedaría hasta cambiar el zoom.
-                    if (c.members.isNotEmpty() && c.left.isFinite()) old.union(c.left, c.top, c.right, c.bottom)
-                    urgentDamage.add(old)
-                }
+                if (changed != null) urgentDamage.add(changed)
                 if (c.members.isEmpty() && had) {
                     c.node.discardDisplayList()
                     c.recorded = false
+                    c.contentDirty = false
                 }
             } else if (built != c.built) {
                 c.meshDirty = true
@@ -173,7 +170,7 @@ class StrokeChunks {
             if (!live && !was) continue
             val blurry = settled && c.recorded && abs(ln(scale / c.recordedScale)) > REZOOM
             when {
-                c.contentDirty -> record(c, scale, urgent = true)
+                c.contentDirty -> if (c.members.isEmpty()) c.contentDirty = false else record(c, scale, urgent = true)
                 live && (c.meshDirty || blurry || !c.recorded) ->
                     if (System.nanoTime() < deadline) record(c, scale, urgent = false) else pending = true
             }
@@ -265,14 +262,38 @@ class StrokeChunks {
             }
         }
         c.node.endRecording()
-        val box = RectF(c.left, c.top, c.right, c.bottom)
-        val target = if (urgent) urgentDamage else damage
-        target.add(if (c.recorded) RectF(c.recordedBounds).apply { union(box) } else box)
-        c.recordedBounds.set(box)
+        // Lo urgente ya quedó acotado a los trazos que cambiaron. Unir acá la caja vieja de toda
+        // la tanda volvía a marcar cada baldosa de esa caja para este mismo cuadro.
+        if (!urgent && c.left.isFinite() && c.bottom.isFinite()) {
+            val box = RectF(c.left, c.top, c.right, c.bottom)
+            damage.add(if (c.recorded && c.recordedBounds.left.isFinite()) RectF(c.recordedBounds).apply { union(box) } else box)
+        }
+        if (c.left.isFinite() && c.bottom.isFinite()) c.recordedBounds.set(c.left, c.top, c.right, c.bottom) else c.recordedBounds.setEmpty()
         c.recorded = true
         c.recordedScale = scale
         c.contentDirty = false
         c.meshDirty = false
+    }
+
+    /** Caja de los trazos que no están en las dos listas, con un margen para el antialiasing. */
+    private fun changedBounds(before: List<InkStroke>, after: List<InkStroke>): RectF? {
+        val seen = IdentityHashMap<InkStroke, Unit>(after.size * 2 + 1)
+        for (s in after) seen[s] = Unit
+        var l = Float.POSITIVE_INFINITY
+        var t = Float.POSITIVE_INFINITY
+        var r = Float.NEGATIVE_INFINITY
+        var b = Float.NEGATIVE_INFINITY
+        fun take(s: InkStroke) {
+            if (s.left.isNaN() || s.right.isNaN()) return
+            l = minOf(l, s.left)
+            t = minOf(t, s.top)
+            r = maxOf(r, s.right)
+            b = maxOf(b, s.bottom)
+        }
+        for (s in before) if (seen.remove(s) == null) take(s)
+        for (s in seen.keys) take(s)
+        if (l > r) return null
+        return RectF(l - DAMAGE_PAD, t - DAMAGE_PAD, r + DAMAGE_PAD, b + DAMAGE_PAD)
     }
 
     private val roughPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -352,6 +373,9 @@ class StrokeChunks {
 
         /** Ancho de la línea provisoria de la pluma, por su grosor (la presión la hace variar). */
         const val ROUGH_PEN_WIDTH = 0.8f
+
+        /** Margen (dp del mundo) alrededor del trazo que cambió, para el borde difuminado. */
+        const val DAMAGE_PAD = 4f
 
         /** Regrabar si el zoom cambió más de ×1,6 desde la grabación (antialiasing de Ink). */
         val REZOOM = ln(1.6f)

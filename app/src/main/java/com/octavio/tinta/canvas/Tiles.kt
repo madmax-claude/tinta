@@ -217,6 +217,7 @@ class Tiles(private val density: Float) {
             if (inside) d else d + 1e6f
         }
         var spent = 0
+        var urgentLeft = URGENT_CAP
         var pending = false
         var missing = false
         for (t in wanted) {
@@ -230,15 +231,19 @@ class Tiles(private val density: Float) {
             val inside = t.ix in ix0..ix1 && t.iy in iy0..iy1
             val cost = content.cost(t.left, t.top, t.right, t.bottom) + 1
             // Quieta, la vista pinta al menos una por cuadro aunque tenga muchos trazos; con los
-            // dedos moviéndola, la mitad, para que el movimiento no se trabe.
+            // dedos moviéndola, la mitad, para que el movimiento no se trabe. Lo urgente (un
+            // borrado) se repinta enseguida, pero sólo unas pocas por cuadro: si no, la goma
+            // regraba toda la zona en el mismo cuadro y la hoja se traba.
             val limit = if (settled) budget else budget / 2
-            val fits = t.urgent || spent + cost <= limit || (settled && spent == 0)
+            val fits = if (t.urgent) urgentLeft > 0 else spent + cost <= limit || (settled && spent == 0)
             if (fits) {
+                val wasUrgent = t.urgent
                 record(t, content)
                 spent += cost
+                if (wasUrgent) urgentLeft--
             } else {
                 pending = true
-                if (inside && !t.ready) missing = true
+                if (inside && (!t.ready || t.urgent)) missing = true
             }
         }
         // Las que todavía están apareciendo también necesitan algo debajo.
@@ -261,7 +266,9 @@ class Tiles(private val density: Float) {
         }
         val now = SystemClock.uptimeMillis()
         for (t in wanted) {
-            if (!t.ready) continue
+            // Una baldosa urgente que todavía no se regrabó no se dibuja: si no, se sigue viendo
+            // la tinta ya borrada o lo que se está moviendo, hasta que el dedo se levanta.
+            if (!t.ready || (t.dirty && t.urgent)) continue
             fade(t, now)
             drawTile(canvas, t, scale, tx, ty)
         }
@@ -366,6 +373,9 @@ class Tiles(private val density: Float) {
 
         /** Filas que se preparan arriba y abajo de la vista. */
         private const val AHEAD_ROWS = 2
+
+        /** Baldosas urgentes que se regraban en un cuadro. El resto espera al siguiente. */
+        private const val URGENT_CAP = 6
 
         /** Baldosas de más, como mucho, al adelantar la hoja de al lado. */
         private const val MAX_EXTRA = 8

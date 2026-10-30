@@ -60,12 +60,20 @@ object Cut {
     }
 
     fun densify(points: List<Point>, step: Float): List<Point> {
+        if (points.isEmpty() || !(step > 0f) || !step.isFinite()) return points
         val out = ArrayList<Point>(points.size * 2)
         out.add(points[0])
         for (k in 1 until points.size) {
             val a = points[k - 1]
             val b = points[k]
-            val n = ceil(hypot(b.x - a.x, b.y - a.y) / step).toInt()
+            val dist = hypot(b.x - a.x, b.y - a.y)
+            // Un tramo infinito o enorme no puede armar millones de puntos: con eso la goma
+            // trababa la hoja en un solo segmento.
+            if (!dist.isFinite() || dist <= step) {
+                out.add(b)
+                continue
+            }
+            val n = ceil(dist / step).toInt().coerceIn(1, MAX_STEPS)
             for (j in 1 until n) {
                 val f = j.toFloat() / n
                 out.add(
@@ -89,4 +97,7 @@ object Cut {
         val t = if (l2 == 0f) 0f else (((px - ax) * dx + (py - ay) * dy) / l2).coerceIn(0f, 1f)
         return hypot(px - (ax + t * dx), py - (ay + t * dy))
     }
+
+    /** Tope de puntos que se agregan en un solo tramo. */
+    private const val MAX_STEPS = 512
 }

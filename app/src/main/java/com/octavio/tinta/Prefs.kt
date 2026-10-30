@@ -34,7 +34,11 @@ class Prefs(context: Context) {
 
     /** El orden de las herramientas de la barra lateral (las que no estén, al final). */
     var dockOrder: List<com.octavio.tinta.ui.ToolDock.Tool>
-        get() = p.getString("dockOrder", null)?.split(',')?.mapNotNull { n -> com.octavio.tinta.ui.ToolDock.Tool.entries.firstOrNull { it.name == n } }.orEmpty()
+        get() = p.getString("dockOrder", null)?.split(',')?.mapNotNull { n ->
+            // Video quedó dentro de Imagen; ese lugar lo ocupa Texto.
+            val name = if (n == "VIDEO") "TEXT" else n
+            com.octavio.tinta.ui.ToolDock.Tool.entries.firstOrNull { it.name == name }
+        }?.distinct().orEmpty()
         set(v) = p.edit { putString("dockOrder", v.joinToString(",") { it.name }) }
 
     /** Color de hoja para las notas nuevas (el último elegido), o null para el de siempre. */
@@ -61,8 +65,13 @@ class Prefs(context: Context) {
         get() = p.getInt("listColor", 0).takeIf { it != 0 }
         set(v) = p.edit { putInt("listColor", v ?: 0) }
 
+    /** Letra de las herramientas, las hojas y el menú. Ver [com.octavio.tinta.ui.Fonts]. */
+    var font: String
+        get() = p.getString("font", "sans") ?: "sans"
+        set(v) = p.edit { putString("font", v) }
+
     /** Todo lo de Configuración que cambia cómo se arma la pantalla (si cambia, se vuelve a armar). */
-    val look: String get() = "$helpMessages/$topBarColor/$toolsColor/$tabColor/$menuColor/$listColor"
+    val look: String get() = "$helpMessages/$topBarColor/$toolsColor/$tabColor/$menuColor/$listColor/$font"
 
     /** Mostrar los mensajes de ayuda ([Help]). */
     var helpMessages: Boolean
@@ -175,6 +184,16 @@ class Prefs(context: Context) {
     var dockCollapsed: Boolean
         get() = p.getBoolean("dockCollapsed", false)
         set(v) = p.edit { putBoolean("dockCollapsed", v) }
+
+    /** Altura de la barra de herramientas, de 0 (arriba) a 1 (abajo). */
+    var dockBias: Float
+        get() = p.getFloat("dockBias", 0.5f)
+        set(v) = p.edit { putFloat("dockBias", v.coerceIn(0f, 1f)) }
+
+    /** Altura de la tira de hojas, de 0 (arriba) a 1 (abajo). */
+    var pageStripBias: Float
+        get() = p.getFloat("pageStripBias", 0.5f)
+        set(v) = p.edit { putFloat("pageStripBias", v.coerceIn(0f, 1f)) }
 
     /** Carpeta abierta en la lista de notas; null para todas. */
     var folder: String?

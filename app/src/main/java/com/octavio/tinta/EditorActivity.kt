@@ -49,6 +49,7 @@ import com.octavio.tinta.model.MediaKind
 import com.octavio.tinta.model.MeshBuilder
 import com.octavio.tinta.model.Note
 import com.octavio.tinta.model.NoteImage
+import com.octavio.tinta.model.NoteText
 import com.octavio.tinta.model.Figure2D
 import com.octavio.tinta.model.FigureKind
 import com.octavio.tinta.model.PageLayout
@@ -69,6 +70,7 @@ import com.octavio.tinta.storage.Stickers
 import com.octavio.tinta.ui.AudioPlayerBar
 import com.octavio.tinta.ui.CaptureBar
 import com.octavio.tinta.ui.Chrome
+import com.octavio.tinta.ui.Fonts
 import com.octavio.tinta.ui.CropDialog
 import com.octavio.tinta.ui.FloatingToolbar
 import com.octavio.tinta.ui.PageStrip
@@ -175,11 +177,10 @@ class EditorActivity :
     private val autosave = Runnable { save(withThumbnail = false) }
     private val selectionRect = RectF()
 
-    private val pickImage = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let(::addImage)
-    }
-    private val pickVideo = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let(::addVideo)
+    private val pickMedia = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val mime = contentResolver.getType(uri).orEmpty()
+        if (mime.startsWith("video/")) addVideo(uri) else addImage(uri)
     }
     private val askMicrophone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startRecording() else toast("Sin permiso para el micrófono no se puede grabar")
@@ -573,6 +574,7 @@ class EditorActivity :
             canvas.selectedWidget is Media -> SelectionBar.Edit.PLAY
             canvas.selectedWidget != null -> SelectionBar.Edit.WIDGET
             canvas.selectedImage != null -> SelectionBar.Edit.CROP
+            canvas.selectedText != null -> SelectionBar.Edit.TEXT
             else -> null
         }
         selectionBar.showFor(if (shown && !canvas.busy) selectionRect else null, canvas.selectionHasInk, editAs)
@@ -723,7 +725,10 @@ class EditorActivity :
         val n = note
         val paged = n != null && n.pages.paged
         pageStrip.visibility = if (paged) View.VISIBLE else View.GONE
-        if (!paged || n == null) return
+        if (!paged || n == null) {
+            keepToolbarClear()
+            return
+        }
         pageStrip.setSide(left = dock.right)
         pageStrip.setPages(canvas.pageCount, n.pages.height / n.pages.width)
         if (snapshot) {
@@ -733,6 +738,7 @@ class EditorActivity :
             pageStrip.refresh()
         }
         pageStrip.setCurrent(canvas.currentPage())
+        keepToolbarClear()
     }
 
     // --- Lupa ---
@@ -817,6 +823,8 @@ class EditorActivity :
         box.addView(dock, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL))
         dock.setOrder(prefs.dockOrder)
         dock.setState(prefs.dockRight, prefs.dockCollapsed)
+        dock.setBias(prefs.dockBias)
+        dock.onPlaced = { keepToolbarClear() }
         toolbar = FloatingToolbar(this, isDark)
         toolbar.callbacks = this
         toolbar.vertical = prefs.toolbarVertical
@@ -825,7 +833,10 @@ class EditorActivity :
         // cambio de adentro (el reloj, cada segundo), y si no la barra volvía a donde estaba
         // mientras se la arrastraba.
         box.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
-            if (r - l != or - ol || b - t != ob - ot) toolbar.placeAt(prefs.toolbarX, prefs.toolbarY)
+            if (r - l != or - ol || b - t != ob - ot) {
+                toolbar.placeAt(prefs.toolbarX, prefs.toolbarY)
+                keepToolbarClear()
+            }
         }
         selectionBar = SelectionBar(this)
         selectionBar.callbacks = this
@@ -846,6 +857,8 @@ class EditorActivity :
             setMargins(0, dp(10f).toInt(), 0, dp(10f).toInt())
         })
         pageStrip.setCollapsed(prefs.pageStripCollapsed)
+        pageStrip.setBias(prefs.pageStripBias)
+        pageStrip.onPlaced = { keepToolbarClear() }
         pageStrip.visibility = View.GONE
         zoomBar = ZoomBar(this)
         zoomBar.callbacks = this
@@ -1096,6 +1109,19 @@ class EditorActivity :
             timer.textColor = Chrome.ink(c)
             searchPanel.barColor = c
         }
+        val bar = prefs.toolsColor
+        toolbar.setIndicatorColor(if (bar != null) Chrome.ink(bar) else getColor(R.color.ink))
+        pageStrip.setFont(prefs.font)
+        Fonts.apply(window.decorView, prefs.font)
+    }
+
+    /** La barra de lápices no puede quedar encima de la de herramientas ni de la de hojas. */
+    private fun keepToolbarClear() {
+        if (!::toolbar.isInitialized || !::dock.isInitialized) return
+        val rects = ArrayList<RectF>()
+        dock.occupied()?.let(rects::add)
+        if (::pageStrip.isInitialized && pageStrip.visibility == View.VISIBLE) pageStrip.occupied()?.let(rects::add)
+        toolbar.setBlocked(rects)
     }
 
     // --- Captura ---
@@ -1260,7 +1286,10 @@ class EditorActivity :
         when (tool) {
             ToolDock.Tool.PAGES -> pagesMenu(button)
             ToolDock.Tool.ZOOM -> setZoom(!canvas.zoomOn)
-            ToolDock.Tool.IMAGE -> launching { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            ToolDock.Tool.IMAGE -> launching {
+                pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+            }
+            ToolDock.Tool.TEXT -> askText(getString(R.string.add_text), "", multiline = true, onOk = ::addKeyboardText)
             ToolDock.Tool.GRAPH2D -> {
                 val start = Graph2D(0f, 0f, 0f, 0f, listOf("x^2"), -5f, 5f, -5f, 5f, autoY = true, grid = true, color = widgetColor())
                 WidgetEditors.graph2d(this, start, isDark, isNew = true) { insertWidget(it, 600f, 420f) }
@@ -1285,7 +1314,6 @@ class EditorActivity :
                     launching { askMicrophone.launch(Manifest.permission.RECORD_AUDIO) }
                 }
             }
-            ToolDock.Tool.VIDEO -> launching { pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
             ToolDock.Tool.LASER -> {
                 if (mode == Mode.LASER) {
                     mode = previousMode
@@ -1338,6 +1366,17 @@ class EditorActivity :
         // La tira va del otro lado. Al abrir, la barra se pone como quedó antes de que exista la
         // tira (y la tira después toma el lado en updatePageStrip).
         if (::pageStrip.isInitialized) pageStrip.setSide(left = right)
+        keepToolbarClear()
+    }
+
+    override fun onDockBias(bias: Float) {
+        prefs.dockBias = bias
+        keepToolbarClear()
+    }
+
+    override fun onStripBias(bias: Float) {
+        prefs.pageStripBias = bias
+        keepToolbarClear()
     }
 
     /** Agregar, insertar o borrar hojas. En una nota infinita, primero hay que elegir un tamaño. */
@@ -1501,7 +1540,40 @@ class EditorActivity :
             }
             return
         }
+        canvas.selectedText?.let {
+            editSelectedText()
+            return
+        }
         canvas.selectedImage?.let(::crop)
+    }
+
+    /** Pone un texto escrito con el teclado en el centro de lo que se ve y lo deja elegido. */
+    private fun addKeyboardText(value: String) {
+        val size = 22f
+        val paint = Elements.newTextPaint().apply { textSize = size }
+        val lines = value.split('\n')
+        val width = lines.maxOf { paint.measureText(it) }.coerceAtLeast(size * 4) + size
+        val height = size * (1.25f * (lines.size - 1) + 1.3f)
+        val center = canvas.visibleCenter()
+        canvas.clearSelection()
+        mode = Mode.LASSO
+        applyTool()
+        canvas.insert(
+            emptyList(),
+            emptyList(),
+            listOf(NoteText(center.x - width / 2, center.y - height / 2, width, height, value, size, widgetColor())),
+        )
+    }
+
+    private fun editSelectedText() {
+        val current = canvas.selectedText ?: return
+        askText(getString(R.string.add_text), current.text, multiline = true) { value ->
+            val paint = Elements.newTextPaint().apply { textSize = current.size }
+            val lines = value.split('\n')
+            val width = lines.maxOf { paint.measureText(it) }.coerceAtLeast(current.size * 4) + current.size
+            val height = current.size * (1.25f * (lines.size - 1) + 1.3f)
+            canvas.replaceSelectedText(NoteText(current.left, current.top, width, height, value, current.size, current.color))
+        }
     }
 
     override fun onStickerSelection() {

@@ -40,9 +40,16 @@ class PenButton(context: Context, private val dark: Boolean) : View(context) {
         strokeWidth = context.dp(1f)
         color = context.getColor(R.color.card_stroke)
     }
+    /** Color de la raya de línea recta: el de los íconos de la barra, para que contraste. */
+    var indicator = context.getColor(R.color.ink)
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     private val bar = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         strokeCap = Paint.Cap.ROUND
-        strokeWidth = context.dp(2f)
+        strokeWidth = context.dp(3f)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -65,9 +72,9 @@ class PenButton(context: Context, private val dark: Boolean) : View(context) {
         }
         // Debajo, una raya si traza rectas; con su patrón si es a rayas o de puntos.
         if (p.straight || p.dash != com.octavio.tinta.model.Dash.SOLID) {
-            bar.color = context.getColor(R.color.ink)
-            val y = cy + r + context.dp(4f)
-            val half = context.dp(if (p.dash == com.octavio.tinta.model.Dash.SOLID) 7f else 11f)
+            bar.color = indicator
+            val y = cy + r + context.dp(8f)
+            val half = context.dp(if (p.dash == com.octavio.tinta.model.Dash.SOLID) 12f else 14f)
             val w = bar.strokeWidth
             bar.pathEffect = p.dash.lengths(w)?.let { l ->
                 android.graphics.DashPathEffect(FloatArray(l.size) { i -> if (i % 2 == 0) (l[i] - w).coerceAtLeast(0.01f) else l[i] + w }, 0f)

@@ -4,8 +4,12 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -18,6 +22,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
 import com.octavio.tinta.tip
+import kotlin.math.abs
 
 /**
  * Las hojas de la nota en miniatura, en una tira pegada a un costado que se puede esconder (queda
@@ -31,6 +36,9 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
         fun onPageMove(from: Int, to: Int)
         fun onAddPage()
         fun onStripCollapsed(collapsed: Boolean)
+
+        /** Se movió la tira para arriba o para abajo (0 arriba, 1 abajo). */
+        fun onStripBias(bias: Float)
     }
 
     var callbacks: Callbacks? = null
@@ -40,6 +48,14 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
 
     /** De qué lado está: a la izquierda salvo que ahí esté la barra lateral. */
     private var left = true
+
+    /** De 0 (arriba) a 1 (abajo). */
+    private var bias = 0.5f
+
+    /** Después de acomodarla, para correr la barra de lápices si quedó encima. */
+    var onPlaced: (() -> Unit)? = null
+
+    private var face: Typeface = Typeface.SANS_SERIF
 
     private var count = 0
     private var current = 0
@@ -72,6 +88,9 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
                 textSize = 13f
                 setTextColor(context.getColor(R.color.muted))
                 setPadding(context.dp(6f).toInt(), 0, 0, 0)
+                contentDescription = "Mover las hojas"
+                tip("Arrastrá para subir o bajar las hojas")
+                dragVertically(this)
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             hide.setImageResource(R.drawable.ic_chevron)
             hide.background = context.getDrawable(R.drawable.bg_tool)
@@ -87,7 +106,7 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
         list.adapter = adapter
         list.isVerticalScrollBarEnabled = true
         ItemTouchHelper(Mover()).attachToRecyclerView(list)
-        panel.addView(list, LinearLayout.LayoutParams(thumbWidth + context.dp(12f).toInt(), 0, 1f))
+        panel.addView(list, LinearLayout.LayoutParams(thumbWidth + context.dp(12f).toInt(), context.dp(160f).toInt()))
         panel.addView(ImageButton(context).apply {
             setImageResource(R.drawable.ic_add)
             background = context.getDrawable(R.drawable.bg_tool)
@@ -100,7 +119,8 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
         tab.elevation = context.dp(6f)
         tab.contentDescription = "Mostrar las miniaturas de las hojas"
         tab.setOnClickListener { setCollapsed(false, notify = true) }
-        addView(panel, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+        dragVertically(tab)
+        addView(panel, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         addView(tab, LayoutParams(context.dp(26f).toInt(), context.dp(64f).toInt(), Gravity.CENTER_VERTICAL))
         thumbs.onReady = { k -> order.indexOf(k).takeIf { it >= 0 }?.let(adapter::notifyItemChanged) }
         apply()
@@ -113,8 +133,28 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
     }
 
     fun setSide(left: Boolean) {
+        if (this.left == left) return
         this.left = left
         apply()
+    }
+
+    fun setBias(value: Float) {
+        bias = value.coerceIn(0f, 1f)
+        placeY()
+    }
+
+    fun setFont(id: String?) {
+        face = Fonts.typeface(id)
+        list.invalidate()
+    }
+
+    /** Lo que se ve de la tira (el panel o la pestaña), en coordenadas del padre. */
+    fun occupied(): RectF? {
+        val child = if (collapsed) tab else panel
+        if (visibility != VISIBLE || child.visibility != VISIBLE || child.width == 0) return null
+        val x0 = x + child.x
+        val y0 = y + child.y
+        return RectF(x0, y0, x0 + child.width, y0 + child.height)
     }
 
     fun setCollapsed(collapsed: Boolean, notify: Boolean = false) {
@@ -165,9 +205,106 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
         panel.background = context.getDrawable(bg)
         tab.background = context.getDrawable(bg)
         hide.rotation = if (left) 180f else 0f
-        (layoutParams as? LayoutParams)?.let {
-            it.gravity = (if (left) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL
-            layoutParams = it
+        val side = if (left) Gravity.START else Gravity.END
+        (tab.layoutParams as? LayoutParams)?.let {
+            it.gravity = side or Gravity.CENTER_VERTICAL
+            tab.layoutParams = it
+        }
+        val lp = layoutParams as? FrameLayout.LayoutParams ?: return
+        val edge = context.dp(10f).toInt()
+        if (collapsed) {
+            lp.width = FrameLayout.LayoutParams.WRAP_CONTENT
+            lp.height = FrameLayout.LayoutParams.MATCH_PARENT
+            lp.gravity = side
+            lp.setMargins(0, edge, 0, edge)
+            translationY = 0f
+        } else {
+            lp.width = FrameLayout.LayoutParams.WRAP_CONTENT
+            lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
+            lp.gravity = side or Gravity.TOP
+            lp.setMargins(0, 0, 0, 0)
+            tab.translationY = 0f
+        }
+        layoutParams = lp
+        if (!collapsed) fitList()
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        if (!collapsed) fitList()
+        placeY()
+        onPlaced?.invoke()
+    }
+
+    /** La lista no ocupa toda la hoja: así la tira se puede subir o bajar. */
+    private fun fitList() {
+        val parentH = (parent as? View)?.height ?: return
+        if (parentH <= 0) return
+        val chrome = context.dp(8f + 30f + 40f + 8f).toInt()
+        val cap = (parentH * 0.75f).toInt() - chrome
+        val row = (thumbWidth * aspect).toInt() + context.dp(26f).toInt()
+        val want = (count.coerceAtLeast(1) * row).coerceAtMost(cap.coerceAtLeast(row.coerceAtMost(parentH / 2)))
+        val lp = list.layoutParams ?: return
+        if (lp.height == want) return
+        lp.height = want
+        list.layoutParams = lp
+    }
+
+    private fun placeY() {
+        if (collapsed) {
+            translationY = 0f
+            val travel = (height - tab.height).coerceAtLeast(0)
+            tab.translationY = (bias - 0.5f) * travel
+        } else {
+            tab.translationY = 0f
+            val parent = parent as? View ?: return
+            val margin = context.dp(8f)
+            val free = (parent.height - height - 2 * margin).coerceAtLeast(0f)
+            translationY = margin + bias * free
+        }
+    }
+
+    private fun travel(): Float {
+        val parent = parent as? View ?: return 1f
+        return if (collapsed) {
+            (height - tab.height).coerceAtLeast(1).toFloat()
+        } else {
+            val margin = context.dp(8f)
+            (parent.height - height - 2 * margin).coerceAtLeast(1f)
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun dragVertically(handle: View) {
+        val slop = ViewConfiguration.get(context).scaledTouchSlop
+        var downY = 0f
+        var start = 0f
+        var dragging = false
+        handle.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downY = e.rawY
+                    start = bias
+                    dragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dy = e.rawY - downY
+                    if (!dragging && abs(dy) > slop) dragging = true
+                    if (dragging) {
+                        bias = (start + dy / travel()).coerceIn(0f, 1f)
+                        placeY()
+                        onPlaced?.invoke()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!dragging && e.actionMasked == MotionEvent.ACTION_UP) handle.performClick()
+                    else if (dragging) callbacks?.onStripBias(bias)
+                    true
+                }
+                else -> false
+            }
         }
     }
 
@@ -186,6 +323,7 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
             val view = holder.itemView as Thumb
             view.page = k
             view.selectedPage = k == current
+            view.useTypeface(face)
             view.bitmap = thumbs.get(k)
             view.layoutParams = RecyclerView.LayoutParams(thumbWidth + context.dp(12f).toInt(), (thumbWidth * aspect).toInt() + context.dp(26f).toInt())
             view.setOnClickListener { callbacks?.onPageClick(k) }
@@ -247,6 +385,12 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
             textAlign = Paint.Align.CENTER
             textSize = context.dp(12f)
             color = context.getColor(R.color.muted)
+        }
+
+        fun useTypeface(face: Typeface) {
+            if (number.typeface == face) return
+            number.typeface = face
+            invalidate()
         }
         private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 

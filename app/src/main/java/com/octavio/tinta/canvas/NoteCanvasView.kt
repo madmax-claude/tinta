@@ -1475,6 +1475,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** Si lo elegido es un solo widget, para editarlo o reproducirlo. */
     val selectedWidget get() = selection?.takeIf { it.count == 1 }?.widgets?.firstOrNull()
 
+    /** Si lo elegido es un solo texto, para cambiar lo escrito. */
+    val selectedText get() = selection?.takeIf { it.count == 1 }?.texts?.firstOrNull()
+
     /** Se está moviendo lo elegido: lo que está en las listas de la nota no está completo. */
     val busy get() = lifted != null || pending != null
 
@@ -1537,8 +1540,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         selection = Selection(strokes, images, texts, widgets)
     }
 
-    /** Agrega imágenes y widgets a la nota (un paso de deshacer) y los deja elegidos. */
-    fun insert(newImages: List<NoteImage>, newWidgets: List<Widget>) {
+    /** Agrega imágenes, widgets o textos a la nota (un paso de deshacer) y los deja elegidos. */
+    fun insert(newImages: List<NoteImage>, newWidgets: List<Widget>, newTexts: List<NoteText> = emptyList()) {
         finishPending()
         mergeFresh()
         val edits = ArrayList<History.Edit>()
@@ -1550,12 +1553,33 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             widgets.addAll(newWidgets)
             edits.add(History.Add(widgets, newWidgets))
         }
+        if (newTexts.isNotEmpty()) {
+            texts.addAll(newTexts)
+            edits.add(History.Add(texts, newTexts))
+        }
         if (edits.isEmpty()) return
         listener?.onEdited(History.Group(edits))
-        val s = Selection(emptyList(), newImages, emptyList(), newWidgets)
+        val s = Selection(emptyList(), newImages, newTexts, newWidgets)
         selection = s
         dry.contentChanged()
         dry.damage(s.bounds)
+    }
+
+    /** Cambia el texto elegido por otro (un paso de deshacer) y lo deja elegido. */
+    fun replaceSelectedText(updated: NoteText) {
+        finishPending()
+        val sel = selection ?: return
+        if (sel.texts.isEmpty()) return
+        val edits = ArrayList<History.Edit>()
+        removeFrom(texts, sel.texts)?.let(edits::add)
+        texts.add(updated)
+        edits.add(History.Add(texts, listOf(updated)))
+        listener?.onEdited(History.Group(edits))
+        val s = Selection(emptyList(), emptyList(), listOf(updated), emptyList())
+        dry.damage(sel.bounds)
+        dry.damage(s.bounds)
+        dry.contentChanged()
+        selection = s
     }
 
     /** Cambia la imagen o el widget elegido por otro (recortado, editado), en un paso de deshacer. */
@@ -1885,7 +1909,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         node.endRecording()
         lifted = Lifted(removed, node, b)
         dry.strokesChanged()
-        if (sel.images.isNotEmpty() || sel.texts.isNotEmpty() || sel.widgets.isNotEmpty()) dry.damage(b)
+        // También si sólo hay tinta: si no, la baldosa sigue mostrando el original hasta soltar.
+        dry.damage(b)
     }
 
     /** Al soltar: si se movió, se arman las copias movidas; si no, todo vuelve a su lugar. */
@@ -2893,7 +2918,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 padRight = if (side) ahead else 0f,
                 padBottom = if (side) 0f else ahead,
             )
-            val deadline = System.nanoTime() + if (chunks.urgentDamage.isNotEmpty()) CHUNK_BUDGET_NS * 2 else CHUNK_BUDGET_NS
+            val deadline = System.nanoTime() + CHUNK_BUDGET_NS
             var pending = chunks.update(needed.left, needed.top, needed.right, needed.bottom, recordScale, settled, deadline)
             for (r in chunks.urgentDamage) tiles.invalidate(r, urgent = true)
             for (r in chunks.damage) tiles.invalidate(r, urgent = false)

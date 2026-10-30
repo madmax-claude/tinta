@@ -9,12 +9,14 @@ import android.graphics.Paint
 import android.text.InputType
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.Gravity
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.octavio.tinta.ui.Fonts
 import java.io.File
 
 fun Context.dp(v: Float): Float = v * resources.displayMetrics.density
@@ -61,29 +63,40 @@ fun View.padForSystemBars(fullscreen: () -> Boolean = { false }) {
     }
 }
 
-fun Activity.askText(title: CharSequence, initial: String, onOk: (String) -> Unit) {
+fun Activity.askText(title: CharSequence, initial: String, multiline: Boolean = false, onOk: (String) -> Unit) {
     val input = EditText(this).apply {
         setText(initial)
-        setSelectAllOnFocus(true)
-        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        isSingleLine = true
+        if (multiline) {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 4
+            gravity = Gravity.TOP
+        } else {
+            setSelectAllOnFocus(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            isSingleLine = true
+        }
     }
     val box = FrameLayout(this).apply {
         val pad = dp(20f).toInt()
         setPadding(pad, pad / 2, pad, 0)
         addView(input)
     }
+    Fonts.apply(box, Prefs(this).font)
     val dialog = AlertDialog.Builder(this)
         .setTitle(title)
         .setView(box)
         .setPositiveButton(R.string.ok) { _, _ -> input.text.toString().trim().takeIf { it.isNotEmpty() }?.let(onOk) }
         .setNegativeButton(R.string.cancel, null)
         .show()
-    // "Listo" en el teclado equivale a Aceptar.
-    input.imeOptions = EditorInfo.IME_ACTION_DONE
-    input.setOnEditorActionListener { _, _, _ ->
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
-        true
+    if (multiline) {
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+    } else {
+        // "Listo" en el teclado equivale a Aceptar.
+        input.imeOptions = EditorInfo.IME_ACTION_DONE
+        input.setOnEditorActionListener { _, _, _ ->
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            true
+        }
     }
     input.requestFocus()
 }

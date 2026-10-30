@@ -33,6 +33,7 @@ class SelectionBar(context: Context) : LinearLayout(context) {
         WIDGET(R.drawable.ic_edit, "Editar"),
         CROP(R.drawable.ic_crop, "Recortar"),
         PLAY(R.drawable.ic_play, "Reproducir"),
+        TEXT(R.drawable.ic_edit, "Editar el texto"),
     }
 
     var callbacks: Callbacks? = null
