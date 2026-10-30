@@ -42,6 +42,7 @@ import com.octavio.tinta.model.Cut
 import com.octavio.tinta.model.Dash
 import com.octavio.tinta.model.History
 import com.octavio.tinta.model.InkStroke
+import com.octavio.tinta.model.paintInk
 import com.octavio.tinta.model.Figure2D
 import com.octavio.tinta.model.Graph2D
 import com.octavio.tinta.model.Graph3D
@@ -77,9 +78,9 @@ import kotlin.math.min
 /**
  * Lienzo infinito, o de hojas una debajo de otra. El lápiz (y el mouse, útil en el emulador)
  * escribe; los dedos mueven y hacen zoom. Los trazos en curso los dibuja [InProgressStrokesView]
- * con baja latencia; al terminar pasan a [DryLayer], primero como trazos "frescos" dibujados uno por
- * uno y, cuando el lápiz descansa, a las baldosas de [Tiles] (repintarlas cuesta varios ms y no
- * conviene hacerlo entre trazo y trazo).
+ * con baja latencia. El resaltador va debajo de la pluma y del marcador: su trazo en curso está
+ * entre el papel y la capa de tinta. La pluma, al terminar, queda primero como trazo fresco y,
+ * cuando descansa, en su capa; el resaltador pasa directo a las baldosas.
  *
  * Con el lápiz quieto: al empezar, después de un segundo pasa a borrar; al final de un trazo, el
  * trazo se cambia por la figura que se quiso hacer ([Shapes]), que sigue al lápiz hasta levantarlo.
@@ -248,7 +249,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private val density = resources.displayMetrics.density
     private val dry = DryLayer(context)
-    private val wet = InProgressStrokesView(context)
+    /** Resaltador en curso: debajo de la pluma ya escrita. */
+    private val wetUnder = InProgressStrokesView(context)
+    /** Pluma y marcador ya terminados, encima del resaltador. */
+    private val ink = InkLayer(context)
+    /** Pluma o marcador en curso: encima de todo lo escrito. */
+    private val wetPen = InProgressStrokesView(context)
+    /** Capa que tiene el trazo que se está haciendo ahora. */
+    private var strokeWet: InProgressStrokesView? = null
     private val predictor = MotionEventPredictor.newInstance(this)
     private val scratch = Matrix()
     /** Con qué lápiz se empezó cada trazo en curso (su color real, no el de pantalla). */
@@ -289,9 +297,18 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private var cursor: PointF? = null
 
     init {
-        addView(dry, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        addView(wet, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        wet.addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
+        val fill = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        addView(dry, fill)
+        addView(wetUnder, LayoutParams(fill))
+        addView(ink, LayoutParams(fill))
+        addView(wetPen, LayoutParams(fill))
+        watchFinished(wetUnder)
+        watchFinished(wetPen)
+    }
+
+    /** Al soltar, el trazo en curso pasa a la nota. Cada capa avisa de los suyos. */
+    private fun watchFinished(view: InProgressStrokesView) {
+        view.addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
                 val added = strokes.flatMap { (id, s) ->
                     val p = strokePens.remove(id) ?: pen
@@ -300,11 +317,17 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                     styled(InkStroke(p.tool, if (s.brush.colorIntArgb == color) s else s.copy(s.brush.copyWithColorIntArgb(color)), p.sensitivity), p.dash)
                 }
                 addFresh(added)
-                wet.removeFinishedStrokes(strokes.keys)
-                if (penStroke == null) endWritingClip()
+                view.removeFinishedStrokes(strokes.keys)
+                if (penStroke == null) {
+                    strokeWet = null
+                    endWritingClip()
+                }
             }
         })
     }
+
+    private fun activeWet(): InProgressStrokesView =
+        strokeWet?.takeIf { penStroke != null } ?: if (pen.tool == Tool.HIGHLIGHTER) wetUnder else wetPen
 
     /** Lo que tardó cada cuadro fuera del hilo principal, para ajustar cuánto pintar por cuadro. */
     private val frameMetrics = Window.OnFrameMetricsAvailableListener { _, m, _ ->
@@ -316,7 +339,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        wet.eagerInit()
+        wetUnder.eagerInit()
+        wetPen.eagerInit()
         (context as? Activity)?.window?.addOnFrameMetricsAvailableListener(frameMetrics, handler)
     }
 
@@ -501,9 +525,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             return
         }
         listener?.onStrokesAdded(added) // los agrega al final de la lista de la nota
-        fresh.addAll(added)
-        dry.freshChanged()
-        scheduleMerge()
+        if (added.first().tool == Tool.HIGHLIGHTER) {
+            // Directo a las baldosas, debajo de la pluma. No queda un rato encima.
+            dry.strokesChanged()
+        } else {
+            fresh.addAll(added)
+            dry.freshChanged()
+            scheduleMerge()
+        }
     }
 
     private fun scheduleMerge() {
@@ -740,7 +769,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         requestUnbufferedDispatch(e)
         predictor.record(e)
         val brush = Brush.createWithColorIntArgb(pen.tool.family(pen.sensitivity), displayColor(), pen.size, epsilon())
-        val strokeId = wet.startStroke(e, id, brush, inputToWorld(scratch))
+        val layer = if (pen.tool == Tool.HIGHLIGHTER) wetUnder else wetPen
+        strokeWet = layer
+        val strokeId = layer.startStroke(e, id, brush, inputToWorld(scratch))
         strokePens[strokeId] = pen
         penStroke = strokeId
     }
@@ -777,7 +808,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (!erasing && wantsEraser(e, i)) {
             // Apretó el botón con el lápiz apoyado: lo escrito queda y sigue borrando.
             removeCallbacks(hold)
-            penStroke?.let { wet.finishStroke(e, penPointer, it) }
+            penStroke?.let { activeWet().finishStroke(e, penPointer, it) }
             penStroke = null
             lineStart?.let { commitLine() }
             if (shape != null) commitShape()
@@ -825,7 +856,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val strokeId = penStroke ?: return
         predictor.record(e)
         val prediction = predictor.predict()
-        wet.addToStroke(e, penPointer, strokeId, prediction)
+        activeWet().addToStroke(e, penPointer, strokeId, prediction)
         prediction?.recycle()
     }
 
@@ -891,7 +922,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         if (tapped != null) {
             penStroke?.let {
-                wet.cancelStroke(it, e)
+                activeWet().cancelStroke(it, e)
                 strokePens.remove(it)
             }
             penStroke = null
@@ -902,7 +933,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val textHit = textTapHit(e, i, canceled)
         if (textHit != null) {
             penStroke?.let {
-                wet.cancelStroke(it, e)
+                activeWet().cancelStroke(it, e)
                 strokePens.remove(it)
             }
             penStroke = null
@@ -921,10 +952,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (!canceled && !penMoved && e.eventTime - penDownAt < TAP_MS) lastTextTap = null
             penStroke?.let { strokeId ->
                 if (canceled) {
-                    wet.cancelStroke(strokeId, e)
+                    activeWet().cancelStroke(strokeId, e)
                     strokePens.remove(strokeId)
                 } else {
-                    wet.finishStroke(e, id, strokeId)
+                    activeWet().finishStroke(e, id, strokeId)
                 }
             }
         }
@@ -963,7 +994,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         removeCallbacks(fingerHold)
         tapPointer = NONE
         penStroke?.let {
-            wet.cancelStroke(it, e)
+            activeWet().cancelStroke(it, e)
             strokePens.remove(it)
         }
         lineStart = null
@@ -1127,7 +1158,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (!holdToErase) return
             // Quieto desde que se apoyó: lo que se empezó a escribir (un punto) no queda.
             penStroke?.let {
-                wet.cancelStroke(it)
+                activeWet().cancelStroke(it)
                 strokePens.remove(it)
             }
             penStroke = null
@@ -1141,7 +1172,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val strokeId = penStroke ?: return
         val found = Shapes.recognize(trace.toArray(), density / inScale) ?: return
         shapePen = strokePens.remove(strokeId) ?: pen
-        wet.cancelStroke(strokeId)
+        activeWet().cancelStroke(strokeId)
         penStroke = null
         shape = found
         shapeFromX = inX(penX)
@@ -1234,15 +1265,18 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val r = pageForWriting(worldX, worldY)
         writingClip = r
         // El trazo en curso lo dibuja la capa de Ink, en la pantalla (o en el panel de la lupa).
-        wet.clipBounds = android.graphics.Rect(
+        val clip = android.graphics.Rect(
             floor(r.left * inScale + inTx).toInt(), floor(r.top * inScale + inTy).toInt(),
             ceil(r.right * inScale + inTx).toInt(), ceil(r.bottom * inScale + inTy).toInt(),
         )
+        wetUnder.clipBounds = clip
+        wetPen.clipBounds = android.graphics.Rect(clip)
     }
 
     private fun endWritingClip() {
         writingClip = null
-        if (wet.clipBounds != null) wet.clipBounds = null
+        wetUnder.clipBounds = null
+        wetPen.clipBounds = null
     }
 
     /** Lo que queda del trazo dentro de la hoja donde empezó (ver [writingClip]). */
@@ -1973,7 +2007,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         for (img in sel.images) ImageCache.get(img.file) {}?.let { Elements.drawImage(rc, img, it) }
         for (w in sel.widgets) dry.painter.draw(rc, w, dark) { f -> ImageCache.get(f) {} }
         val m = Matrix().apply { setScale(camera.scale, camera.scale) }
-        InkDraw.use { r -> for (s in sel.strokes) r.draw(rc, s.display(dark) ?: continue, m) }
+        InkDraw.use { r ->
+            paintInk(sel.strokes) { s -> r.draw(rc, s.display(dark) ?: return@paintInk, m) }
+        }
         for (t in sel.texts) Elements.drawText(rc, t, dry.textPaint, Appearance.ink(t.color, Tool.PEN, dark))
         node.endRecording()
         lifted = Lifted(removed, node, b)
@@ -3093,8 +3129,41 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 padBottom = if (side) 0f else ahead,
             ) || pending
 
-            save = canvas.save()
+            // El resaltador en curso (y su vista previa) queda debajo de la pluma, que se dibuja en [InkLayer].
+            if (linePreview?.tool == Tool.HIGHLIGHTER || shapePreview?.tool == Tool.HIGHLIGHTER) {
+                val preview = canvas.save()
+                canvas.concat(worldToScreen)
+                InkDraw.use { r -> drawPreviews(canvas, r, worldToScreen, under = true) }
+                canvas.restoreToCount(preview)
+            }
+            basePending = pending
+            settledNow = settled
+            recordScaleNow = recordScale
+        }
+
+        private var basePending = false
+        private var settledNow = true
+        private var recordScaleNow = 1f
+
+        /** Pluma, marcador, texto y el cromo, encima del resaltador en curso. */
+        fun drawInk(canvas: Canvas) {
+            var save = canvas.save()
             canvas.concat(worldToScreen)
+            chunks.forEachNode(view.left, view.top, view.right, view.bottom, under = false) { canvas.drawRenderNode(it) }
+            chunks.drawUnrecordedOver(canvas, view.left, view.top, view.right, view.bottom)
+            if (fresh.isNotEmpty() || linePreview != null || shapePreview != null) {
+                InkDraw.use { r ->
+                    for (s in fresh) {
+                        val mesh = s.display(dark) ?: continue
+                        r.draw(canvas, mesh, worldToScreen)
+                    }
+                    drawPreviews(canvas, r, worldToScreen, under = false)
+                }
+            }
+            for (txt in texts) {
+                if (!RectF.intersects(view, Elements.textBounds(txt))) continue
+                Elements.drawText(canvas, txt, textPaint, Appearance.ink(txt.color, Tool.PEN, dark))
+            }
             lifted?.let { l ->
                 val inner = canvas.save()
                 canvas.translate(l.t.dx, l.t.dy)
@@ -3103,12 +3172,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 canvas.drawRenderNode(l.node)
                 canvas.restoreToCount(inner)
             }
-            if (fresh.isNotEmpty() || linePreview != null || shapePreview != null) {
-                InkDraw.use { r ->
-                    for (s in fresh) r.draw(canvas, s.display(dark) ?: continue, worldToScreen)
-                    drawPreviews(canvas, r, worldToScreen)
-                }
-            }
             canvas.restoreToCount(save)
             if (found.isNotEmpty()) drawFound(canvas, worldToScreen)
             if (zoomOn) drawZoom(canvas, worldToScreen)
@@ -3116,6 +3179,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             drawSelection(canvas)
             captureRect?.let { drawCapture(canvas, it, worldToScreen) }
             textFrame?.let { drawTextFrame(canvas, it, worldToScreen) }
+            var pending = basePending
             if (drawLaser(canvas)) pending = true
             cursor?.let {
                 cursorPaint.color = if (dark) 0x99E0E0E0.toInt() else 0x99404040.toInt()
@@ -3123,14 +3187,19 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             }
             drawFlipShade(canvas)
             if (flipAnim != null || flip?.decided == true) pending = true
-            // Con todo quieto y pintado, se adelanta trabajo para cuando se aleje la vista.
-            if (!pending && settled && penPointer == NONE && fresh.isEmpty()) {
-                // La imagen de toda la nota (se arma en otros hilos), para que al alejar la vista
-                // haya algo debajo desde el primer cuadro.
+            if (!pending && settledNow && penPointer == NONE && fresh.isEmpty()) {
                 prepareOverview()
-                pending = chunks.prewarm(recordScale, System.nanoTime() + PREWARM_NS)
+                pending = chunks.prewarm(recordScaleNow, System.nanoTime() + PREWARM_NS)
             }
-            if (pending) postInvalidateOnAnimation()
+            if (pending) {
+                postInvalidateOnAnimation()
+                ink.postInvalidateOnAnimation()
+            }
+        }
+
+        override fun invalidate() {
+            super.invalidate()
+            ink.invalidate()
         }
 
         private val zoomNode = RenderNode("tinta-lupa").apply { clipToBounds = true }
@@ -3163,8 +3232,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             zoomMatrix.postTranslate(p.left - zoomBox.left * zoomScale, p.top - zoomBox.top * zoomScale)
             canvas.concat(zoomMatrix)
             InkDraw.use { rd ->
-                for (st in fresh) if (st.intersects(zoomBox.left, zoomBox.top, zoomBox.right, zoomBox.bottom)) rd.draw(canvas, st.display(dark) ?: continue, zoomMatrix)
-                drawPreviews(canvas, rd, zoomMatrix)
+                for (st in fresh) if (st.intersects(zoomBox.left, zoomBox.top, zoomBox.right, zoomBox.bottom)) {
+                    rd.draw(canvas, st.display(dark) ?: continue, zoomMatrix)
+                }
+                drawPreviews(canvas, rd, zoomMatrix, under = true)
+                drawPreviews(canvas, rd, zoomMatrix, under = false)
             }
             canvas.restoreToCount(save)
             canvas.drawRoundRect(p, r, r, zoomFrame)
@@ -3198,7 +3270,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             val m = Matrix().apply { setScale(zoomScale, zoomScale) }
             val committed = strokes.subList(0, committedCount())
             InkDraw.use { rd ->
-                for (st in committed) if (st.intersects(box.left, box.top, box.right, box.bottom)) rd.draw(rc, st.display(dark) ?: continue, m)
+                paintInk(committed) { st ->
+                    if (st.intersects(box.left, box.top, box.right, box.bottom)) rd.draw(rc, st.display(dark) ?: return@paintInk, m)
+                }
             }
             for (txt in texts) {
                 if (!RectF.intersects(box, Elements.textBounds(txt))) continue
@@ -3247,12 +3321,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
 
         /** La línea recta y la figura en curso; en una nota con hojas, sólo lo que cae en la hoja. */
-        private fun drawPreviews(canvas: Canvas, r: androidx.ink.rendering.android.canvas.CanvasStrokeRenderer, m: Matrix) {
-            if (linePreview == null && shapePreview == null) return
+        private fun drawPreviews(canvas: Canvas, r: androidx.ink.rendering.android.canvas.CanvasStrokeRenderer, m: Matrix, under: Boolean) {
+            val line = linePreview?.takeIf { (it.tool == Tool.HIGHLIGHTER) == under }
+            val shape = shapePreview?.takeIf { (it.tool == Tool.HIGHLIGHTER) == under }
+            if (line == null && shape == null) return
             val save = canvas.save()
             writingClip?.let { canvas.clipRect(it) }
-            linePreview?.display(dark)?.let { r.draw(canvas, it, m) }
-            shapePreview?.display(dark)?.let { r.draw(canvas, it, m) }
+            line?.display(dark)?.let { r.draw(canvas, it, m) }
+            shape?.display(dark)?.let { r.draw(canvas, it, m) }
             canvas.restoreToCount(save)
         }
 
@@ -3383,15 +3459,21 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 val area = RectF(wd.left, wd.top, wd.right, wd.bottom)
                 painter.draw(canvas, wd, dark) { f -> ImageCache.get(f) { damage(area) } }
             }
-            chunks.forEachNode(left, top, right, bottom) { canvas.drawRenderNode(it) }
-            for (txt in texts) {
-                if (!RectF.intersects(box, Elements.textBounds(txt))) continue
-                Elements.drawText(canvas, txt, textPaint, Appearance.ink(txt.color, Tool.PEN, dark))
-            }
+            // Sólo el resaltador. La pluma y el texto van en [InkLayer], encima del trazo en curso.
+            chunks.forEachNode(left, top, right, bottom, under = true) { canvas.drawRenderNode(it) }
             canvas.restoreToCount(save)
         }
 
-        override fun cost(left: Float, top: Float, right: Float, bottom: Float) = chunks.count(left, top, right, bottom)
+        override fun cost(left: Float, top: Float, right: Float, bottom: Float) = chunks.count(left, top, right, bottom, under = true)
+    }
+
+    /** La pluma, el marcador y el texto, encima del resaltador. */
+    private inner class InkLayer(context: Context) : View(context) {
+        init {
+            setWillNotDraw(false)
+        }
+
+        override fun onDraw(canvas: Canvas) = dry.drawInk(canvas)
     }
 
     /** Lista de floats que crece, sin cajas. */

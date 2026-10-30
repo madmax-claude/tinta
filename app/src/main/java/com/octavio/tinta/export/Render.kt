@@ -12,6 +12,7 @@ import com.octavio.tinta.canvas.Paper
 import com.octavio.tinta.canvas.WidgetPainter
 import com.octavio.tinta.model.Background
 import com.octavio.tinta.model.InkStroke
+import com.octavio.tinta.model.paintInk
 import com.octavio.tinta.model.NoteImage
 import com.octavio.tinta.model.NoteText
 import com.octavio.tinta.model.PageLayout
@@ -203,9 +204,9 @@ object Render {
             if (!RectF.intersects(visible, RectF(w.left, w.top, w.right, w.bottom))) continue
             painter.draw(canvas, w, dark = false) { f -> Elements.decode(f, 1024, hardware = false) }
         }
-        for (s in strokes) {
-            if (!s.intersects(left, top, right, bottom)) continue
-            renderer.draw(canvas, s.build() ?: continue, m)
+        paintInk(strokes) { s ->
+            if (!s.intersects(left, top, right, bottom)) return@paintInk
+            renderer.draw(canvas, s.build() ?: return@paintInk, m)
         }
         val textPaint = Elements.newTextPaint()
         for (t in texts) if (RectF.intersects(visible, Elements.textBounds(t))) Elements.drawText(canvas, t, textPaint)
@@ -274,7 +275,7 @@ object Render {
         val painter = WidgetPainter()
         for (w in widgets) painter.draw(canvas, w, dark = false) { f -> Elements.decode(f, 256, hardware = false) }
         val renderer = CanvasStrokeRenderer.create()
-        for (s in strokes) renderer.draw(canvas, s.build() ?: continue, m)
+        paintInk(strokes) { s -> renderer.draw(canvas, s.build() ?: return@paintInk, m) }
         val textPaint = Elements.newTextPaint()
         for (t in texts) Elements.drawText(canvas, t, textPaint)
         return bitmap

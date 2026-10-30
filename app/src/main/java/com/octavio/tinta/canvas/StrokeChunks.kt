@@ -21,8 +21,9 @@ import kotlin.math.ln
  * y las baldosas de [Tiles] reproducen las grabaciones. Sólo se vuelve a grabar la tanda que cambió,
  * y su caja queda en [damage] para que se repinten las baldosas que la tocan.
  *
- * El orden de dibujo se conserva: una tanda junta trazos seguidos de la lista, los trazos nuevos
- * van a la última, y deshacer devuelve cada trazo a la tanda que tenía.
+ * El resaltador va siempre debajo de la pluma y del marcador. Dentro de cada capa el orden se
+ * conserva: una tanda junta trazos seguidos de esa capa, los nuevos van a la última de la suya, y
+ * deshacer devuelve cada trazo a la tanda que tenía.
  *
  * Todas las tandas cuelgan de un nodo raíz invisible que se dibuja en cada cuadro ([keepAlive]):
  * Android libera lo grabado en un RenderNode que deja de dibujarse, y una tanda que ninguna baldosa
@@ -51,13 +52,18 @@ class StrokeChunks {
         /** Caja de lo que tiene grabado ahora, para repintar lo que deja de estar. */
         val recordedBounds = RectF()
 
+        /** Resaltador: estas tandas se dibujan antes que la pluma y el marcador. */
+        var under = false
+
         fun intersects(l: Float, t: Float, r: Float, b: Float) =
             members.isNotEmpty() && !(right < l || left > r || bottom < t || top > b)
     }
 
     private val chunks = ArrayList<Chunk>()
     private val owner = IdentityHashMap<InkStroke, Chunk>()
-    private var tail: Chunk? = null
+    /** Última tanda de resaltador, y última de pluma o marcador. Van en capas distintas. */
+    private var highlightTail: Chunk? = null
+    private var inkTail: Chunk? = null
     private val root = RenderNode("tinta-raiz").apply {
         clipToBounds = false
         alpha = 0f
@@ -86,14 +92,18 @@ class StrokeChunks {
      */
     fun sync(strokes: List<InkStroke>) {
         for (c in chunks) c.next.clear()
-        var previous: Chunk? = null
+        var prevUnder: Chunk? = null
+        var prevOver: Chunk? = null
         for (s in strokes) {
+            val under = s.tool == Tool.HIGHLIGHTER
+            val previous = if (under) prevUnder else prevOver
+            val layerTail = if (under) highlightTail else inkTail
             // Un trazo nuevo en el medio de la lista (un pedazo que dejó la goma) va con el de
-            // antes, para que se siga dibujando debajo de lo que estaba encima.
-            val c = owner[s] ?: previous?.takeIf { it !== tail && it.next.size < 2 * CAPACITY }?.also { owner[s] = it }
+            // antes, de su misma capa, para que se siga dibujando debajo de lo que estaba encima.
+            val c = owner[s] ?: previous?.takeIf { it !== layerTail && it.next.size < 2 * CAPACITY }?.also { owner[s] = it }
                 ?: tailFor(s).also { owner[s] = it }
             c.next.add(s)
-            previous = c
+            if (under) prevUnder = c else prevOver = c
         }
         for (c in chunks) {
             val built = c.next.count { it.stroke != null }
@@ -107,7 +117,8 @@ class StrokeChunks {
                 c.contentDirty = !first
                 updateBounds(c)
                 rootDirty = true
-                if (changed != null) urgentDamage.add(changed)
+                // La pluma no está en las baldosas: un cambio suyo no tiene que agujerearlas.
+                if (changed != null && c.under) urgentDamage.add(changed)
                 if (c.members.isEmpty() && had) {
                     c.node.discardDisplayList()
                     c.recorded = false
@@ -141,7 +152,8 @@ class StrokeChunks {
         for (c in chunks) c.node.discardDisplayList()
         chunks.clear()
         owner.clear()
-        tail = null
+        highlightTail = null
+        inkTail = null
         rootDirty = true
         opened = false
         damage.clear()
@@ -149,9 +161,12 @@ class StrokeChunks {
     }
 
     /** Cuántos trazos tienen las tandas que tocan el rectángulo (cuenta tandas enteras). */
-    fun count(l: Float, t: Float, r: Float, b: Float): Int {
+    fun count(l: Float, t: Float, r: Float, b: Float, under: Boolean? = null): Int {
         var n = 0
-        for (c in chunks) if (c.intersects(l, t, r, b)) n += c.members.size
+        for (c in chunks) {
+            if (under != null && c.under != under) continue
+            if (c.intersects(l, t, r, b)) n += c.members.size
+        }
         return n
     }
 
@@ -196,15 +211,31 @@ class StrokeChunks {
         return false
     }
 
-    /** Llama a `action` con el nodo de cada tanda grabada que toca el rectángulo, en orden. */
-    inline fun forEachNode(l: Float, t: Float, r: Float, b: Float, action: (RenderNode) -> Unit) {
-        for (i in 0 until size) nodeIfIntersects(i, l, t, r, b)?.let(action)
+    /**
+     * Llama a `action` con el nodo de cada tanda grabada que toca el rectángulo, en orden.
+     * `under` en true: sólo resaltadores. En false: pluma y marcador. Null: las dos, el resaltador
+     * primero porque sus tandas están adelante en la lista.
+     */
+    inline fun forEachNode(l: Float, t: Float, r: Float, b: Float, under: Boolean? = null, action: (RenderNode) -> Unit) {
+        for (i in 0 until size) nodeIfIntersects(i, l, t, r, b, under)?.let(action)
+    }
+
+    /**
+     * Pluma o marcador de una tanda que todavía no se grabó: una línea provisoria, para que no
+     * desaparezca detrás del papel mientras la tanda espera turno.
+     */
+    fun drawUnrecordedOver(canvas: Canvas, l: Float, t: Float, r: Float, b: Float) {
+        for (c in chunks) {
+            if (c.under || c.recorded || !c.intersects(l, t, r, b)) continue
+            for (s in c.members) if (s.intersects(l, t, r, b)) drawRough(canvas, s)
+        }
     }
 
     val size get() = chunks.size
 
-    fun nodeIfIntersects(i: Int, l: Float, t: Float, r: Float, b: Float): RenderNode? {
+    fun nodeIfIntersects(i: Int, l: Float, t: Float, r: Float, b: Float, under: Boolean? = null): RenderNode? {
         val c = chunks[i]
+        if (under != null && c.under != under) return null
         return if (c.recorded && c.intersects(l, t, r, b)) c.node else null
     }
 
@@ -264,7 +295,7 @@ class StrokeChunks {
         c.node.endRecording()
         // Lo urgente ya quedó acotado a los trazos que cambiaron. Unir acá la caja vieja de toda
         // la tanda volvía a marcar cada baldosa de esa caja para este mismo cuadro.
-        if (!urgent && c.left.isFinite() && c.bottom.isFinite()) {
+        if (!urgent && c.under && c.left.isFinite() && c.bottom.isFinite()) {
             val box = RectF(c.left, c.top, c.right, c.bottom)
             damage.add(if (c.recorded && c.recordedBounds.left.isFinite()) RectF(c.recordedBounds).apply { union(box) } else box)
         }
@@ -320,13 +351,22 @@ class StrokeChunks {
         canvas.drawPath(roughPath, roughPaint)
     }
 
-    /** La tanda para un trazo nuevo: la última, salvo que esté llena o muy lejos. */
+    /** La tanda para un trazo nuevo: la última de su capa, salvo que esté llena o muy lejos. */
     private fun tailFor(s: InkStroke): Chunk {
-        val t = tail
+        val under = s.tool == Tool.HIGHLIGHTER
+        val t = if (under) highlightTail else inkTail
         if (t != null && t.next.size < CAPACITY && near(t, s)) return t
         return Chunk().also {
-            chunks.add(it)
-            tail = it
+            it.under = under
+            if (under) {
+                // Adelante de la pluma, para que el resaltador quede debajo.
+                val at = chunks.indexOfFirst { c -> !c.under }
+                if (at < 0) chunks.add(it) else chunks.add(at, it)
+                highlightTail = it
+            } else {
+                chunks.add(it)
+                inkTail = it
+            }
         }
     }
 

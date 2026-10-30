@@ -147,3 +147,12 @@ class InkStroke private constructor(
         ) = InkStroke(tool, color, size, epsilon, left, top, right, bottom, encoded, null, sensitivity, group)
     }
 }
+
+/**
+ * Pinta primero los resaltadores y después la pluma y el marcador. Dentro de cada grupo se
+ * conserva el orden en que se escribieron.
+ */
+inline fun paintInk(strokes: List<InkStroke>, draw: (InkStroke) -> Unit) {
+    for (s in strokes) if (s.tool == Tool.HIGHLIGHTER) draw(s)
+    for (s in strokes) if (s.tool != Tool.HIGHLIGHTER) draw(s)
+}

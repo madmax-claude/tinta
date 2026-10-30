@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import com.octavio.tinta.model.InkStroke
+import com.octavio.tinta.model.paintInk
 import com.octavio.tinta.model.Work
 import java.util.concurrent.Executors
 import kotlin.math.ceil
@@ -133,9 +134,9 @@ class Overview(private val onReady: () -> Unit) {
             val canvas = Canvas(bitmap)
             canvas.concat(m)
             val renderer = CanvasStrokeRenderer.create() // uno por hilo: no es seguro compartirlo
-            for (s in strokes) {
-                if (!s.intersects(l, top, r, bottom)) continue
-                val mesh = s.build() ?: continue
+            paintInk(strokes) { s ->
+                if (!s.intersects(l, top, r, bottom)) return@paintInk
+                val mesh = s.build() ?: return@paintInk
                 renderer.draw(canvas, s.display(dark) ?: mesh, m)
             }
             // Copia en la GPU desde este hilo: si no, la primera vez que se dibuja se sube en
