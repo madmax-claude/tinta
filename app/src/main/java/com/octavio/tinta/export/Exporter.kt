@@ -184,11 +184,11 @@ object Exporter {
      * Exporta `n` (una copia de la nota, que se lee en otro hilo) en `format` y abre "Compartir".
      * `launch` envuelve el abrir otra pantalla (el editor lo usa para no creer que lo cerraron).
      */
-    fun start(activity: Activity, store: NoteStore, n: Note, format: Format, launch: (() -> Unit) -> Unit) {
+    fun start(activity: Activity, store: NoteStore, n: Note, format: Format, pages: List<Int>? = null, launch: (() -> Unit) -> Unit) {
         fun fail(e: Throwable) = activity.runOnUiThread { activity.toastLong("No se pudo exportar: ${e.message}") }
         when (format) {
             Format.PDF -> store.io.execute {
-                runCatching { Render.pdf(activity, n.title, n.strokes, n.images, n.texts, n.widgets, n.background, n.pages, n.paperColor) }
+                runCatching { Render.pdf(activity, n.title, n.strokes, n.images, n.texts, n.widgets, n.background, n.pages, n.paperColor, pages) }
                     .onSuccess { f -> activity.runOnUiThread { launch { share(activity, listOf(f), "application/pdf") } } }
                     .onFailure(::fail)
             }

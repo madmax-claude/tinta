@@ -140,6 +140,8 @@ class NoteFormatTest {
         assertEquals(10, NoteFormat.versionFor(hasGroups = true, horizontal = true))
         assertEquals(11, NoteFormat.versionFor(hasGroups = false, richText = true))
         assertEquals(11, NoteFormat.versionFor(hasGroups = true, horizontal = true, richText = true))
+        assertEquals(12, NoteFormat.versionFor(hasGroups = false, sheetMeta = true))
+        assertEquals(12, NoteFormat.versionFor(hasGroups = true, horizontal = true, richText = true, sheetMeta = true))
         val header = NoteFormat.Header("Vieja", Background.GRID, 1L, 2L, Viewport(), 0, version = 8)
         val bytes = ByteArrayOutputStream().also { buf -> DataOutputStream(buf).use { NoteFormat.writeHeader(it, header) } }.toByteArray()
         assertEquals(8, DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readHeader(it) }.version)
@@ -160,5 +162,21 @@ class NoteFormatTest {
         assertEquals("serif", back.font)
         assertEquals(true, back.clip)
         assertEquals(18f, back.size)
+    }
+
+    @Test
+    fun pageNamesAndPapersRoundTripOnlyWhenPresent() {
+        val pages = PageLayout(
+            PageSize.A4, minPages = 3,
+            names = listOf("Ejercicio 3"),
+            papers = listOf(-1, Background.MUSIC.id),
+        )
+        val header = NoteFormat.Header("Hojas", Background.GRID, 1L, 2L, Viewport(), 0, pages, version = 12)
+        val bytes = ByteArrayOutputStream().also { buf -> DataOutputStream(buf).use { NoteFormat.writeHeader(it, header) } }.toByteArray()
+        val back = DataInputStream(ByteArrayInputStream(bytes)).use { NoteFormat.readHeader(it) }
+        assertEquals(header, back)
+        assertEquals("Ejercicio 3", back.pages.nameOf(0))
+        assertEquals(Background.MUSIC, back.pages.paperOf(1, Background.GRID))
+        assertEquals(Background.GRID, back.pages.paperOf(0, Background.GRID))
     }
 }

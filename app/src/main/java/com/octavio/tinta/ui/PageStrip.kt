@@ -35,6 +35,9 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
         fun onPageClick(k: Int)
         fun onPageMove(from: Int, to: Int)
         fun onAddPage()
+
+        /** Tocaron el nombre (o el número) de la hoja: para cambiarlo. */
+        fun onPageLabel(k: Int) = Unit
         fun onStripCollapsed(collapsed: Boolean)
 
         /** Se movió la tira para arriba o para abajo (0 arriba, 1 abajo). */
@@ -59,6 +62,7 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
 
     private var count = 0
     private var current = 0
+    private var names: List<String> = emptyList()
 
     /** Alto / ancho de las hojas, para el tamaño de las miniaturas. */
     private var aspect = 1.414f
@@ -164,11 +168,12 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
         if (notify) callbacks?.onStripCollapsed(collapsed)
     }
 
-    /** Cuántas hojas hay y cómo son. */
-    fun setPages(count: Int, aspect: Float) {
-        val changed = count != this.count || aspect != this.aspect
+    /** Cuántas hojas hay, cómo son y el nombre de cada una. */
+    fun setPages(count: Int, aspect: Float, names: List<String> = this.names) {
+        val changed = count != this.count || aspect != this.aspect || names != this.names
         this.count = count
         this.aspect = aspect
+        this.names = names
         if (dragFrom < 0) {
             order.clear()
             order.addAll(0 until count)
@@ -321,13 +326,16 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val k = order[position]
             val view = holder.itemView as Thumb
+            val name = names.getOrNull(k)?.trim().orEmpty()
             view.page = k
+            view.caption = name
             view.selectedPage = k == current
             view.useTypeface(face)
             view.bitmap = thumbs.get(k)
             view.layoutParams = RecyclerView.LayoutParams(thumbWidth + context.dp(12f).toInt(), (thumbWidth * aspect).toInt() + context.dp(26f).toInt())
             view.setOnClickListener { callbacks?.onPageClick(k) }
-            view.contentDescription = "Hoja ${k + 1}"
+            view.onLabel = { callbacks?.onPageLabel(k) }
+            view.contentDescription = if (name.isEmpty()) "Hoja ${k + 1}" else "Hoja ${k + 1}, $name"
             view.invalidate()
         }
     }
@@ -368,8 +376,12 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
     @SuppressLint("ViewConstructor")
     private class Thumb(context: Context) : View(context) {
         var page = 0
+        var caption = ""
         var selectedPage = false
         var bitmap: android.graphics.Bitmap? = null
+        var onLabel: (() -> Unit)? = null
+        private var labelDown = false
+        private var downAt = 0L
         private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = context.dp(1f)
@@ -400,7 +412,46 @@ class PageStrip(context: Context, private val thumbs: PageThumbs) : FrameLayout(
             val b = bitmap
             if (b != null) canvas.drawBitmap(b, null, r, bitmapPaint) else canvas.drawRect(r, blank)
             canvas.drawRect(r, if (selectedPage) ring else edge)
-            canvas.drawText("${page + 1}", width / 2f, height - context.dp(5f), number)
+            if (caption.isNotEmpty()) {
+                number.textAlign = Paint.Align.LEFT
+                number.textSize = context.dp(10f)
+                canvas.drawText("${page + 1}", r.left + context.dp(3f), r.top + context.dp(12f), number)
+                number.textAlign = Paint.Align.CENTER
+                number.textSize = context.dp(12f)
+            }
+            val shown = caption.ifEmpty { "${page + 1}" }
+            canvas.drawText(ellipsize(shown, width - context.dp(8f)), width / 2f, height - context.dp(5f), number)
+        }
+
+        /** Un toque en el nombre cambia el nombre; mantenerlo apretado sigue sirviendo para reordenar. */
+        @SuppressLint("ClickableViewAccessibility")
+        override fun onTouchEvent(e: MotionEvent): Boolean {
+            val inLabel = e.y >= height - context.dp(22f)
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    labelDown = inLabel
+                    downAt = e.eventTime
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (labelDown && inLabel && e.eventTime - downAt < 350) {
+                        labelDown = false
+                        isPressed = false
+                        onLabel?.invoke()
+                        return true
+                    }
+                    labelDown = false
+                }
+                MotionEvent.ACTION_CANCEL -> labelDown = false
+            }
+            return super.onTouchEvent(e)
+        }
+
+        private fun ellipsize(text: String, max: Float): String {
+            if (number.measureText(text) <= max) return text
+            val dots = number.measureText("…")
+            var end = text.length
+            while (end > 1 && number.measureText(text, 0, end) + dots > max) end--
+            return text.substring(0, end).trimEnd() + "…"
         }
     }
 

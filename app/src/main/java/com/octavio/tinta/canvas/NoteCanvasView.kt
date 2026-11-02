@@ -70,10 +70,12 @@ import java.util.concurrent.FutureTask
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * Lienzo infinito, o de hojas una debajo de otra. El lápiz (y el mouse, útil en el emulador)
@@ -108,8 +110,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** Cambió lo elegido con el lazo, o su lugar en la pantalla. */
         fun onSelectionChanged() = Unit
 
-        /** Un clic del botón lateral con el lápiz en el aire, sin tocar la pantalla. */
+        /** Un clic corto del botón lateral: vuelve a la herramienta anterior. */
         fun onStylusButtonClick() = Unit
+
+        /** Los últimos lápices, para el círculo que aparece al mantener el botón. */
+        fun recentPens(): List<Pen> = emptyList()
+
+        /** Eligió uno de esos lápices en el círculo. */
+        fun onPickRecentPen(pen: Pen) = Unit
 
         /** Tocaron un audio o un video: hay que reproducirlo. */
         fun onMediaTap(media: Media) = Unit
@@ -589,6 +597,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (isPen(e, 0)) {
             val near = e.actionMasked != MotionEvent.ACTION_HOVER_EXIT
             hover = if (near) PointF(e.x, e.y) else null
+            if (near) notePenTip(e.x, e.y)
             setCursor(if (near && wantsEraser(e, 0)) PointF(e.x, e.y) else null)
             logButtons(e)
         }
@@ -615,8 +624,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     /**
      * Sigue los botones que informa el lápiz en sus propios eventos: los deja en el registro (para
-     * ver qué manda cada tablet) y un clic (apretar y soltar rápido) avisa con
-     * [Listener.onStylusButtonClick], para volver a la herramienta anterior.
+     * ver qué manda cada tablet). Un clic corto avisa con [Listener.onStylusButtonClick]. Mantenerlo
+     * apretado abre el círculo de los últimos lápices y, al soltar, no cambia de herramienta.
      */
     private fun logButtons(e: MotionEvent) {
         if (e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) return // los botones del mouse son otra cosa
@@ -630,10 +639,110 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     private fun buttonChanged(down: Boolean, up: Boolean, time: Long) {
-        if (down) buttonDownAt = time
+        if (down) {
+            if (buttonDownAt != 0L || penWheel != null) return
+            buttonDownAt = time
+            postDelayed(wheelHold, WHEEL_HOLD_MS)
+        }
         if (up) {
-            if (buttonDownAt != 0L && time - buttonDownAt < CLICK_MS) listener?.onStylusButtonClick()
+            if (buttonDownAt == 0L && penWheel == null) return
+            removeCallbacks(wheelHold)
+            if (penWheel != null) commitPenWheel()
+            else if (buttonDownAt != 0L && time - buttonDownAt < CLICK_MS) listener?.onStylusButtonClick()
             buttonDownAt = 0L
+        }
+    }
+
+    /** El botón lateral cuando llega como tecla (el lápiz o su control por Bluetooth). */
+    fun penButton(down: Boolean, time: Long) = buttonChanged(down = down, up = !down, time = time)
+
+    private var penTipX = Float.NaN
+    private var penTipY = Float.NaN
+    private var penWheel: PenWheel? = null
+
+    private fun notePenTip(x: Float, y: Float) {
+        penTipX = x
+        penTipY = y
+        if (penWheel != null) aimPenWheel(x, y)
+    }
+
+    private val wheelHold = Runnable { openPenWheel() }
+
+    /** Círculo alrededor de la punta, con los últimos lápices. */
+    private class PenWheel(val cx: Float, val cy: Float, val pens: List<Pen>, var index: Int)
+
+    private fun openPenWheel() {
+        if (buttonDownAt == 0L || penWheel != null) return
+        val list = listener?.recentPens().orEmpty().distinct().take(8)
+        if (list.size < 2) return
+        val cx = if (penTipX.isNaN()) width / 2f else penTipX
+        val cy = if (penTipY.isNaN()) height / 2f else penTipY
+        penWheel = PenWheel(cx, cy, list, -1)
+        if (!penTipX.isNaN()) aimPenWheel(penTipX, penTipY)
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        dry.invalidate()
+    }
+
+    private fun aimPenWheel(x: Float, y: Float) {
+        val w = penWheel ?: return
+        val dx = x - w.cx
+        val dy = y - w.cy
+        val inner = 36f * density
+        val index = if (hypot(dx, dy) < inner) {
+            -1
+        } else {
+            val n = w.pens.size
+            var a = atan2(dy.toDouble(), dx.toDouble()) + Math.PI / 2.0
+            if (a < 0) a += Math.PI * 2
+            ((a / (Math.PI * 2)) * n).toInt().mod(n)
+        }
+        if (index == w.index) return
+        w.index = index
+        if (index >= 0) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        dry.invalidate()
+    }
+
+    private fun commitPenWheel() {
+        val w = penWheel ?: return
+        val picked = w.index.takeIf { it in w.pens.indices }?.let { w.pens[it] }
+        penWheel = null
+        dry.invalidate()
+        if (picked != null) listener?.onPickRecentPen(picked)
+    }
+
+    private val wheelFill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val wheelRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val wheelDot = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private fun drawPenWheel(canvas: Canvas) {
+        val w = penWheel ?: return
+        val radius = 92f * density
+        wheelFill.color = 0x66000000
+        canvas.drawCircle(w.cx, w.cy, radius, wheelFill)
+        wheelRing.color = 0xFFFFFFFF.toInt()
+        wheelRing.strokeWidth = 2f * density
+        canvas.drawCircle(w.cx, w.cy, radius, wheelRing)
+        wheelRing.strokeWidth = 1.5f * density
+        canvas.drawCircle(w.cx, w.cy, 36f * density, wheelRing)
+        val n = w.pens.size
+        val dot = 18f * density
+        val orbit = radius * 0.68f
+        for (i in w.pens.indices) {
+            val angle = -Math.PI / 2.0 + 2.0 * Math.PI * i / n
+            val x = w.cx + (orbit * cos(angle)).toFloat()
+            val y = w.cy + (orbit * sin(angle)).toFloat()
+            val p = w.pens[i]
+            wheelDot.color = if (p.tool == Tool.HIGHLIGHTER) {
+                val a = (p.opacity.coerceIn(5, 100) * 255 / 100).coerceIn(1, 255)
+                (p.color and 0x00FFFFFF) or (a shl 24)
+            } else {
+                Appearance.ink(p.color, p.tool, dark)
+            }
+            val rad = if (i == w.index) dot * 1.25f else dot
+            canvas.drawCircle(x, y, rad, wheelDot)
+            wheelRing.color = if (i == w.index) 0xFFFFFFFF.toInt() else 0x66000000
+            wheelRing.strokeWidth = if (i == w.index) 3f * density else 1.5f * density
+            canvas.drawCircle(x, y, rad, wheelRing)
         }
     }
 
@@ -697,12 +806,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             startTextFrame(e.getX(i), e.getY(i), id)
             return
         }
-        // Con el lazo, lo elegido se arrastra con el lápiz o con un dedo.
-        if (mode == Mode.LASSO && penPointer == NONE && fingers.isEmpty() && !wantsEraser(e, i) &&
-            (byPen || e.eventTime - lastPenSeen > PALM_GRACE_MS)
+        // Con el lazo, lo elegido se arrastra con el lápiz o con un dedo. El recuadro de un texto
+        // también se cambia de tamaño con el lápiz, aunque la herramienta sea escribir.
+        if (penPointer == NONE && fingers.isEmpty() && !wantsEraser(e, i) &&
+            (byPen || e.eventTime - lastPenSeen > PALM_GRACE_MS) &&
+            (mode == Mode.LASSO || selectedText != null)
         ) {
             val kind = selectionHit(e.getX(i), e.getY(i))
-            if (kind != NONE) {
+            if (kind != NONE && (mode == Mode.LASSO || kind == RESIZE)) {
                 if (byPen) lastPenSeen = e.eventTime
                 startGesture(kind, id, e.getX(i), e.getY(i))
                 return
@@ -804,6 +915,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val i = e.findPointerIndex(penPointer)
         if (i < 0) return
         lastPenSeen = e.eventTime
+        notePenTip(e.getX(i), e.getY(i))
         logButtons(e)
         if (!erasing && wantsEraser(e, i)) {
             // Apretó el botón con el lápiz apoyado: lo escrito queda y sigue borrando.
@@ -992,6 +1104,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         removeCallbacks(lassoHold)
         removeCallbacks(captureHold)
         removeCallbacks(fingerHold)
+        removeCallbacks(wheelHold)
+        penWheel = null
+        buttonDownAt = 0L
         tapPointer = NONE
         penStroke?.let {
             activeWet().cancelStroke(it, e)
@@ -1528,7 +1643,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             }
             for (s in strokes) add(s.left, s.top, s.right, s.bottom)
             for (i in images) Elements.imageBounds(i).let { add(it.left, it.top, it.right, it.bottom) }
-            for (t in texts) Elements.textBounds(t).let { add(it.left, it.top, it.right, it.bottom) }
+            for (t in texts) {
+                // Un texto solo se elige por su recuadro: los bordes cambian ese tamaño, no la letra.
+                if (texts.size == 1 && strokes.isEmpty() && images.isEmpty() && widgets.isEmpty()) {
+                    add(t.left, t.top, t.left + t.width, t.top + t.height)
+                } else {
+                    Elements.textBounds(t).let { add(it.left, it.top, it.right, it.bottom) }
+                }
+            }
             for (w in widgets) add(w.left, w.top, w.right, w.bottom)
         }
 
@@ -1566,6 +1688,12 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private var gestureY = 0f
     private var gestureMoved = false
 
+    /** Borde del recuadro de texto que se está arrastrando: 1 izquierda, 2 derecha, 4 arriba, 8 abajo. */
+    private var hitEdge = 0
+    private var resizeEdge = 0
+    private var resizeText: NoteText? = null
+    private val resizeBox = RectF()
+
     val hasSelection get() = selection != null
 
     /** Lo elegido tiene algo a lo que se le puede cambiar el color. */
@@ -1593,10 +1721,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private fun selectionCorners(out: FloatArray): Boolean {
         val sel = selection ?: return false
         val pad = SELECTION_PAD * density / camera.scale
-        val l = sel.bounds.left - pad
-        val t = sel.bounds.top - pad
-        val r = sel.bounds.right + pad
-        val b = sel.bounds.bottom + pad
+        val box = if (resizeText != null) resizeBox else sel.bounds
+        val l = box.left - pad
+        val t = box.top - pad
+        val r = box.right + pad
+        val b = box.bottom + pad
         val tr = lifted?.t ?: Transform()
         val xs = floatArrayOf(l, r, r, l)
         val ys = floatArrayOf(t, t, b, b)
@@ -1633,6 +1762,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private fun screenY(y: Float) = y * camera.scale + camera.ty
 
     fun clearSelection() {
+        if (gesture == RESIZE) {
+            gesturePointer = NONE
+            gesture = NONE
+            resizeText = null
+        }
         finishPending()
         if (selection != null) selection = null
     }
@@ -1904,6 +2038,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         rotateHandle(corners, handle)
         val touch = HANDLE_TOUCH * density
         if (hypot(sx - handle.x, sy - handle.y) < touch) return ROTATE
+        val edge = textResizeEdge(sx, sy)
+        if (edge != 0) {
+            hitEdge = edge
+            return RESIZE
+        }
         if (hypot(sx - corners[4], sy - corners[5]) < touch) return SCALE
         // Adentro del rectángulo (girado), con un poco de margen.
         val lasso = Lasso(corners)
@@ -1917,6 +2056,72 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (segmentDistance(sx, sy, ax, ay, bx, by) < margin) return MOVE
         }
         return NONE
+    }
+
+    /**
+     * Si (sx, sy) cae en un borde o una esquina del recuadro de un texto elegido, qué bordes mueve
+     * (1 izquierda, 2 derecha, 4 arriba, 8 abajo). 0 si no es un texto solo o no tocó un borde.
+     */
+    private fun textResizeEdge(sx: Float, sy: Float): Int {
+        val t = selectedText ?: return 0
+        if (selection?.count != 1) return 0
+        val box = if (resizeText === t) resizeBox else RectF(t.left, t.top, t.left + t.width, t.top + t.height)
+        val l = screenX(box.left)
+        val top = screenY(box.top)
+        val r = screenX(box.right)
+        val b = screenY(box.bottom)
+        val touch = HANDLE_TOUCH * density
+        val spots = arrayOf(
+            floatArrayOf(l, top, 5f),
+            floatArrayOf((l + r) / 2f, top, 4f),
+            floatArrayOf(r, top, 6f),
+            floatArrayOf(r, (top + b) / 2f, 2f),
+            floatArrayOf(r, b, 10f),
+            floatArrayOf((l + r) / 2f, b, 8f),
+            floatArrayOf(l, b, 9f),
+            floatArrayOf(l, (top + b) / 2f, 1f),
+        )
+        var best = 0
+        var bestD = touch
+        for (s in spots) {
+            val d = hypot(sx - s[0], sy - s[1])
+            if (d < bestD) {
+                bestD = d
+                best = s[2].toInt()
+            }
+        }
+        return best
+    }
+
+    /** El texto tal como se está viendo: con el recuadro nuevo mientras se arrastra un borde. */
+    private fun shownText(t: NoteText): NoteText {
+        val live = resizeText
+        if (live !== t) return t
+        return NoteText(resizeBox.left, resizeBox.top, resizeBox.width().coerceAtLeast(1f), resizeBox.height().coerceAtLeast(1f), t.text, t.size, t.color, t.font, t.clip)
+    }
+
+    private fun moveTextResize(sx: Float, sy: Float) {
+        val t = resizeText ?: return
+        if (!gestureMoved) {
+            if (hypot(sx - gestureX, sy - gestureY) < TOUCH_SLOP * density) return
+            gestureMoved = true
+        }
+        val x = camera.toWorldX(sx)
+        val y = camera.toWorldY(sy)
+        val minW = max(t.size * 2f, 48f)
+        val minH = max(t.size * 1.3f, 28f)
+        var l = t.left
+        var r = t.left + t.width
+        var top = t.top
+        var b = t.top + t.height
+        if (resizeEdge and 1 != 0) l = min(x, r - minW)
+        if (resizeEdge and 2 != 0) r = max(x, l + minW)
+        if (resizeEdge and 4 != 0) top = min(y, b - minH)
+        if (resizeEdge and 8 != 0) b = max(y, top + minH)
+        resizeBox.set(l, top, r, b)
+        dry.zoomDirty = true
+        dry.invalidate()
+        listener?.onSelectionChanged()
     }
 
     private fun segmentDistance(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
@@ -1934,6 +2139,12 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         gestureX = sx
         gestureY = sy
         gestureMoved = false
+        if (kind == RESIZE) {
+            val t = selectedText ?: return
+            resizeText = t
+            resizeBox.set(t.left, t.top, t.left + t.width, t.top + t.height)
+            resizeEdge = hitEdge
+        }
     }
 
     private fun moveGesture(e: MotionEvent) {
@@ -1941,6 +2152,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (i < 0) return
         val sx = e.getX(i)
         val sy = e.getY(i)
+        if (gesture == RESIZE) {
+            moveTextResize(sx, sy)
+            return
+        }
         if (!gestureMoved) {
             if (hypot(sx - gestureX, sy - gestureY) < TOUCH_SLOP * density) return
             gestureMoved = true
@@ -1982,6 +2197,21 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     private fun endGesture() {
+        if (gesture == RESIZE) {
+            val moved = gestureMoved
+            val t = resizeText
+            gesturePointer = NONE
+            gesture = NONE
+            resizeText = null
+            if (t != null && moved) {
+                val w = resizeBox.width().coerceAtLeast(1f)
+                val h = resizeBox.height().coerceAtLeast(1f)
+                replaceSelectedText(NoteText(resizeBox.left, resizeBox.top, w, h, t.text, t.size, t.color, t.font, t.clip))
+            } else {
+                dry.invalidate()
+            }
+            return
+        }
         gesturePointer = NONE
         gesture = NONE
         if (lifted != null) commitLift()
@@ -2405,6 +2635,45 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
     }
 
+    /**
+     * Inserta en `at` una hoja con el fondo `paper` (el de la nota si es el mismo). Lo que estaba
+     * ahí y más abajo baja una hoja. Un paso de deshacer.
+     */
+    fun insertSheet(at: Int, paper: Background, onDone: () -> Unit) {
+        if (!pages.paged || shifting) {
+            onDone()
+            return
+        }
+        val index = at.coerceIn(0, pageCount)
+        val id = if (paper == paperStyle) -1 else paper.id
+        remapPages(pageCount + 1, onDone, fillPaper = index to id) { p -> if (p < index) p else p + 1 }
+    }
+
+    /** Una copia de la hoja `k` justo después, con su fondo y su nombre. Un paso de deshacer. */
+    fun duplicatePage(k: Int, onDone: () -> Unit) {
+        if (!pages.paged || shifting || k !in 0 until pageCount) {
+            onDone()
+            return
+        }
+        remapPages(pageCount + 1, onDone, copyFrom = setOf(k)) { p -> if (p < k) p else p + 1 }
+    }
+
+    /** Le pone nombre a la hoja `k` (vacío se lo saca). Un paso de deshacer. */
+    fun renamePage(k: Int, name: String) {
+        if (!pages.paged || k < 0) return
+        val next = pages.withName(k, name)
+        if (next == pages) return
+        setPages(next, pages)
+    }
+
+    /** El fondo de la hoja `k`. Si es el de la nota, la hoja vuelve a seguirlo. */
+    fun setPagePaper(k: Int, paper: Background) {
+        if (!pages.paged || k !in 0 until pageCount) return
+        val next = pages.withPaper(k, if (paper == paperStyle) null else paper)
+        if (next == pages) return
+        setPages(next, pages)
+    }
+
     /** Lleva la hoja `from` al lugar `to`; las del medio se corren una. Un paso de deshacer. */
     fun movePage(from: Int, to: Int, onDone: () -> Unit) {
         if (!pages.paged || from == to) return
@@ -2420,10 +2689,17 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     /**
      * Cambia de hoja lo que está escrito: cada cosa (por la hoja donde cae su centro) va a la hoja
-     * `newPage(p)`, o se borra si da null. Lo que no cambia de hoja no se toca. Las copias corridas
-     * se arman en segundo plano; mientras tanto no se puede escribir.
+     * `newPage(p)`, o se borra si da null. Lo que no cambia de hoja no se toca. Con `copyFrom`, lo
+     * de esas hojas se queda y además se copia a `newPage`. Las copias corridas se arman en segundo
+     * plano; mientras tanto no se puede escribir.
      */
-    private fun remapPages(newCount: Int, onDone: () -> Unit, newPage: (Int) -> Int?) {
+    private fun remapPages(
+        newCount: Int,
+        onDone: () -> Unit,
+        copyFrom: Set<Int> = emptySet(),
+        fillPaper: Pair<Int, Int>? = null,
+        newPage: (Int) -> Int?,
+    ) {
         if (shifting) return
         finishPending()
         clearSelection()
@@ -2432,43 +2708,61 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val sideways = old.horizontal
         fun shift(x: Float, y: Float): Float? {
             val p = old.pageOf(x, y)
-            if (p < 0) return 0f
+            if (p < 0 || p in copyFrom) return 0f
             val q = newPage(p) ?: return null
             return (q - p) * old.step
         }
+        fun copyOf(x: Float, y: Float): Float? {
+            val p = old.pageOf(x, y)
+            if (p !in copyFrom || p < 0) return null
+            val q = newPage(p) ?: return null
+            val d = (q - p) * old.step
+            return if (d == 0f) null else d
+        }
         val movedStrokes = ArrayList<Pair<InkStroke, Float>>()
         val goneStrokes = ArrayList<InkStroke>()
+        val copiedStrokes = ArrayList<Pair<InkStroke, Float>>()
         for (st in strokes) {
             if (st.left.isNaN()) continue
-            val d = shift((st.left + st.right) / 2, (st.top + st.bottom) / 2)
+            val midX = (st.left + st.right) / 2
+            val midY = (st.top + st.bottom) / 2
+            val d = shift(midX, midY)
             if (d == null) goneStrokes.add(st) else if (d != 0f) movedStrokes.add(st to d)
+            copyOf(midX, midY)?.let { copiedStrokes.add(st to it) }
         }
-        fun <T> split(items: List<T>, x: (T) -> Float, y: (T) -> Float): Pair<List<Pair<T, Float>>, List<T>> {
+        fun <T> split(items: List<T>, x: (T) -> Float, y: (T) -> Float): Triple<List<Pair<T, Float>>, List<T>, List<Pair<T, Float>>> {
             val moved = ArrayList<Pair<T, Float>>()
             val gone = ArrayList<T>()
+            val copied = ArrayList<Pair<T, Float>>()
             for (it in items) {
                 val d = shift(x(it), y(it))
                 if (d == null) gone.add(it) else if (d != 0f) moved.add(it to d)
+                val copy = copyOf(x(it), y(it))
+                if (copy != null) copied.add(it to copy)
             }
-            return moved to gone
+            return Triple(moved, gone, copied)
         }
-        val (movedImages, goneImages) = split(images, { it.centerX }, { it.centerY })
-        val (movedTexts, goneTexts) = split(texts, { Elements.textBounds(it).centerX() }, { Elements.textBounds(it).centerY() })
-        val (movedWidgets, goneWidgets) = split(widgets, { it.centerX }, { it.centerY })
-        val new = old.copy(minPages = max(1, newCount))
+        val (movedImages, goneImages, copiedImages) = split(images, { it.centerX }, { it.centerY })
+        val (movedTexts, goneTexts, copiedTexts) = split(texts, { Elements.textBounds(it).centerX() }, { Elements.textBounds(it).centerY() })
+        val (movedWidgets, goneWidgets, copiedWidgets) = split(widgets, { it.centerX }, { it.centerY })
+        val new = old.remapSheets(max(1, newCount), newPage, copyFrom, fillPaper)
         shifting = true
-        val bulk = movedStrokes.size > WARM_NOW_LIMIT
+        val bulk = movedStrokes.size + copiedStrokes.size > WARM_NOW_LIMIT
+        fun slide(d: Float) = Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d)
         val task = FutureTask(Callable {
-            val strokesCopy = Work.map(movedStrokes) { (st, d) ->
-                st.transformedBuilt(Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d))
-            }
+            val strokesCopy = Work.map(movedStrokes) { (st, d) -> st.transformedBuilt(slide(d)) }
+            val strokesDup = Work.map(copiedStrokes) { (st, d) -> st.transformedBuilt(slide(d)) }
+            // Una copia no es la misma línea: borrar una no tiene que borrar la otra.
+            val renamed = HashMap<Long, Long>()
+            for (s in strokesDup) if (s.group != 0L) s.group = renamed.getOrPut(s.group) { InkStroke.newGroup() }
+            val built = strokesCopy + strokesDup
             // Muchos trazos: las mallas de Android se calientan después, de a poco.
-            if (!bulk) InkDraw.warmNow(strokesCopy)
+            if (!bulk) InkDraw.warmNow(built)
             Added(
-                strokesCopy,
-                movedImages.map { (i, d) -> i.transformed(Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d)) },
-                movedTexts.map { (t, d) -> t.transformed(Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d)) },
-                movedWidgets.map { (w, d) -> w.transformed(Transform.translation(if (sideways) d else 0f, if (sideways) 0f else d)) },
+                built,
+                movedImages.map { (i, d) -> i.transformed(slide(d)) } + copiedImages.map { (i, d) -> i.transformed(slide(d)) },
+                movedTexts.map { (t, d) -> t.transformed(slide(d)) } + copiedTexts.map { (t, d) -> t.transformed(slide(d)) },
+                movedWidgets.map { (w, d) -> w.transformed(slide(d)) } + copiedWidgets.map { (w, d) -> w.transformed(slide(d)) },
             )
         })
         val p = Pending(task) { a ->
@@ -3161,8 +3455,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 }
             }
             for (txt in texts) {
-                if (!RectF.intersects(view, Elements.textBounds(txt))) continue
-                Elements.drawText(canvas, txt, textPaint, Appearance.ink(txt.color, Tool.PEN, dark))
+                val shown = shownText(txt)
+                if (!RectF.intersects(view, Elements.textBounds(shown))) continue
+                Elements.drawText(canvas, shown, textPaint, Appearance.ink(shown.color, Tool.PEN, dark))
             }
             lifted?.let { l ->
                 val inner = canvas.save()
@@ -3186,6 +3481,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 canvas.drawCircle(it.x, it.y, eraserRadius * density, cursorPaint)
             }
             drawFlipShade(canvas)
+            drawPenWheel(canvas)
             if (flipAnim != null || flip?.decided == true) pending = true
             if (!pending && settledNow && penPointer == NONE && fresh.isEmpty()) {
                 prepareOverview()
@@ -3275,8 +3571,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 }
             }
             for (txt in texts) {
-                if (!RectF.intersects(box, Elements.textBounds(txt))) continue
-                Elements.drawText(rc, txt, textPaint, Appearance.ink(txt.color, Tool.PEN, dark))
+                val shown = shownText(txt)
+                if (!RectF.intersects(box, Elements.textBounds(shown))) continue
+                Elements.drawText(rc, shown, textPaint, Appearance.ink(shown.color, Tool.PEN, dark))
             }
             zoomNode.endRecording()
         }
@@ -3303,8 +3600,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             canvas.drawPath(outlinePath, outline)
             if (pending != null) return
             val r = HANDLE_RADIUS * density
-            canvas.drawCircle(corners[4], corners[5], r, handleFill)
-            canvas.drawCircle(corners[4], corners[5], r, handleRing)
+            val textBox = selectedText != null && selection?.count == 1
+            if (!textBox) {
+                canvas.drawCircle(corners[4], corners[5], r, handleFill)
+                canvas.drawCircle(corners[4], corners[5], r, handleRing)
+            }
             rotateHandle(corners, handle)
             val mx = (corners[0] + corners[2]) / 2
             val my = (corners[1] + corners[3]) / 2
@@ -3317,6 +3617,25 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 angleText.color = accent
                 val deg = ((Math.round(l.t.degrees) % 360) + 360) % 360
                 canvas.drawText("$deg°", handle.x, handle.y - r * 1.8f, angleText)
+            }
+            if (textBox) drawTextHandles(canvas)
+        }
+
+        /** Manijas en los bordes y las esquinas del recuadro, para cambiarle el tamaño sin la letra. */
+        private fun drawTextHandles(canvas: Canvas) {
+            val t = selectedText ?: return
+            val box = if (resizeText === t) resizeBox else RectF(t.left, t.top, t.left + t.width, t.top + t.height)
+            val pts = floatArrayOf(
+                box.left, box.top, box.centerX(), box.top, box.right, box.top,
+                box.right, box.centerY(), box.right, box.bottom, box.centerX(), box.bottom,
+                box.left, box.bottom, box.left, box.centerY(),
+            )
+            val radius = HANDLE_RADIUS * density * 0.75f
+            for (i in pts.indices step 2) {
+                val x = screenX(pts[i])
+                val y = screenY(pts[i + 1])
+                canvas.drawCircle(x, y, radius, handleFill)
+                canvas.drawCircle(x, y, radius, handleRing)
             }
         }
 
@@ -3505,6 +3824,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         const val SCALE = 2
         const val ROTATE = 3
 
+        /** Arrastrar un borde del recuadro de texto. */
+        const val RESIZE = 4
+
         /** La manija de girar, a esta distancia (dp) del borde de arriba. */
         const val ROTATE_OFFSET = 30f
 
@@ -3552,6 +3874,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
         /** Un clic del botón lateral dura menos que esto. */
         const val CLICK_MS = 500L
+
+        /** Mantener el botón este tiempo abre el círculo de lápices, en vez de cambiar de herramienta. */
+        const val WHEEL_HOLD_MS = 280L
 
         /** Tiempo por cuadro para grabar tandas de trazos que no corren prisa. */
         const val CHUNK_BUDGET_NS = 6_000_000L

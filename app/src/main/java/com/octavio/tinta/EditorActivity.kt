@@ -39,6 +39,7 @@ import com.octavio.tinta.canvas.NoteCanvasView.Mode
 import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.model.Appearance
+import com.octavio.tinta.model.Background
 import com.octavio.tinta.model.Clipboard
 import com.octavio.tinta.model.Find
 import com.octavio.tinta.model.Graph2D
@@ -497,14 +498,18 @@ class EditorActivity :
     }
 
     /**
-     * El botón lateral del lápiz: un clic vuelve a la herramienta anterior. Puede llegar en los
-     * eventos del lápiz (lo ve el lienzo), como tecla del lápiz, o, en el Lenovo Tab Pen Plus, como
-     * tecla de su "control multimedia" por Bluetooth.
+     * El botón lateral del lápiz. Un clic corto vuelve a la herramienta anterior. Mantenerlo
+     * apretado abre un círculo alrededor de la punta para elegir entre los últimos lápices. Puede
+     * llegar en los eventos del lápiz (lo ve el lienzo), como tecla del lápiz, o, en el Lenovo Tab
+     * Pen Plus, como tecla de su "control multimedia" por Bluetooth.
      */
     @SuppressLint("InlinedApi")
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (isPenButtonKey(keyCode, event)) {
-            if (event.repeatCount == 0) Diag.log("tecla del botón: $event de ${event.device?.name}")
+            if (event.repeatCount == 0) {
+                Diag.log("tecla del botón: $event de ${event.device?.name}")
+                canvas.penButton(down = true, event.eventTime)
+            }
             return true
         }
         if (event.device?.supportsSource(InputDevice.SOURCE_STYLUS) == true) Diag.log("tecla del lápiz: $event")
@@ -513,7 +518,7 @@ class EditorActivity :
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (isPenButtonKey(keyCode, event)) {
-            if (event.eventTime - event.downTime < BUTTON_CLICK_MS) swapTool()
+            canvas.penButton(down = false, event.eventTime)
             return true
         }
         return super.onKeyUp(keyCode, event)
@@ -586,8 +591,35 @@ class EditorActivity :
         if (captureArea != null && canvas.captureOnScreen(captureScreen)) captureBar.showFor(captureScreen)
     }
 
-    /** Clic del botón lateral: vuelve a la herramienta de antes (y otro clic, a esta). */
+    /** Clic corto del botón lateral: vuelve a la herramienta de antes (y otro clic, a esta). */
     override fun onStylusButtonClick() = swapTool()
+
+    override fun recentPens(): List<Pen> {
+        val used = prefs.recentPens.filter { it in pens }
+        if (used.size >= 2) return used.take(8)
+        return (used + pens.filter { it !in used }).distinct().take(8)
+    }
+
+    override fun onPickRecentPen(pen: Pen) {
+        val i = pens.indexOf(pen)
+        if (i < 0) return
+        leaveTextTool()
+        selected = i
+        mode = Mode.PEN
+        applyTool()
+    }
+
+    /** Anota el lápiz de ahora entre los últimos usados, para el círculo del botón. */
+    private fun rememberPen() {
+        if (mode != Mode.PEN) return
+        val pen = pens.getOrNull(selected) ?: return
+        if (pen == lastRemembered) return
+        lastRemembered = pen
+        val next = (listOf(pen) + prefs.recentPens.filter { it != pen }).take(8)
+        if (next != prefs.recentPens) prefs.recentPens = next
+    }
+
+    private var lastRemembered: Pen? = null
 
     /** Una herramienta de la barra: el modo y, con la pluma, cuál de los lápices. */
     private data class ToolChoice(val mode: Mode, val pen: Int) {
@@ -614,6 +646,9 @@ class EditorActivity :
     override fun onPagesChanged(pages: PageLayout) {
         note?.pages = pages
         changed(redraw = false)
+        if (::pageStrip.isInitialized && pages.paged) {
+            pageStrip.setPages(canvas.pageCount, pages.height / pages.width.coerceAtLeast(1f), pages.names)
+        }
     }
 
     /** `redraw`: la lista cambió desde acá (deshacer, borrar todo) y el lienzo no lo sabe. */
@@ -735,7 +770,7 @@ class EditorActivity :
             return
         }
         pageStrip.setSide(left = dock.right)
-        pageStrip.setPages(canvas.pageCount, n.pages.height / n.pages.width)
+        pageStrip.setPages(canvas.pageCount, n.pages.height / n.pages.width, n.pages.names)
         if (snapshot) {
             pageThumbs.update(
                 PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages, n.paperColor),
@@ -771,7 +806,7 @@ class EditorActivity :
 
     override fun onPageCountChanged(count: Int) {
         val n = note ?: return
-        if (n.pages.paged) pageStrip.setPages(count, n.pages.height / n.pages.width)
+        if (n.pages.paged) pageStrip.setPages(count, n.pages.height / n.pages.width, n.pages.names)
     }
 
     override fun onPageClick(k: Int) = canvas.scrollToPage(k)
@@ -782,6 +817,12 @@ class EditorActivity :
     }
 
     override fun onAddPage() = canvas.addPageAtEnd()
+
+    override fun onPageLabel(k: Int) = renamePage(k)
+
+    private fun renamePage(k: Int) {
+        askText("Nombre de la hoja ${k + 1}", canvas.pages.nameOf(k)) { canvas.renamePage(k, it) }
+    }
 
     override fun onStripCollapsed(collapsed: Boolean) {
         prefs.pageStripCollapsed = collapsed
@@ -933,6 +974,7 @@ class EditorActivity :
         }
         canvas.pen = pens[selected]
         canvas.mode = mode
+        rememberPen()
         toolbar.setPens(pens, selected, mode)
         dock.setActive(when {
             textTool -> ToolDock.Tool.TEXT
@@ -1441,7 +1483,25 @@ class EditorActivity :
                 prefs.pageStripCollapsed = pageStrip.collapsed
             },
             onAddAtEnd = { canvas.addPageAtEnd() },
-            onInsert = { after -> shift(if (after) k + 1 else k, delete = false) },
+            onInsert = { after ->
+                val at = if (after) k + 1 else k
+                val noteBg = note?.background ?: canvas.paperStyle
+                Popups.backgrounds(this, anchor, "Fondo de la hoja nueva", noteBg, isDark) { bg ->
+                    loading.visibility = View.VISIBLE
+                    canvas.insertSheet(at, bg) { loading.visibility = View.GONE }
+                }
+            },
+            onDuplicate = {
+                loading.visibility = View.VISIBLE
+                canvas.duplicatePage(k) { loading.visibility = View.GONE }
+            },
+            onRename = { renamePage(k) },
+            onPagePaper = {
+                val noteBg = note?.background ?: canvas.paperStyle
+                Popups.backgrounds(this, anchor, "Fondo de esta hoja", canvas.pages.paperOf(k, noteBg), isDark) { bg ->
+                    canvas.setPagePaper(k, bg)
+                }
+            },
             onDelete = {
                 confirm(getString(R.string.delete_page, k + 1), getString(R.string.delete)) { shift(k, delete = true) }
             },
@@ -1836,12 +1896,29 @@ class EditorActivity :
     private fun export(format: Exporter.Format) {
         val n = note ?: return
         canvas.finishPending()
+        if (format == Exporter.Format.PDF && n.pages.paged) {
+            val box = Render.bounds(n.strokes, n.images, n.texts, n.widgets)
+            val used = n.pages.used(if (box == null) Float.NaN else n.pages.endOf(box.right, box.bottom))
+            if (used > 1) {
+                Popups.pickPages(this, used, n.pages, canvas.currentPage()) { which ->
+                    if (which.isEmpty()) toast("Marcá al menos una hoja") else exportNow(format, which)
+                }
+                return
+            }
+        }
+        exportNow(format, null)
+    }
+
+    /** `pages`: hojas del PDF, o null para la nota entera. */
+    private fun exportNow(format: Exporter.Format, pages: List<Int>?) {
+        val n = note ?: return
+        canvas.finishPending()
         if (format == Exporter.Format.NOTE) {
             handler.removeCallbacks(autosave)
             save(withThumbnail = true)
         }
         if (format != Exporter.Format.TEXT) hint(getString(R.string.exporting))
-        Exporter.start(this, store, Exporter.snapshot(n), format) { open -> launching(open) }
+        Exporter.start(this, store, Exporter.snapshot(n), format, pages) { open -> launching(open) }
     }
 
     companion object {
@@ -1858,9 +1935,6 @@ class EditorActivity :
 
         /** Las miniaturas se rehacen este tiempo después del último cambio. */
         private const val THUMBS_DELAY_MS = 1200L
-
-        /** Un clic del botón dura menos que esto. */
-        private const val BUTTON_CLICK_MS = 600L
 
         /** Cuánto esperar para ver si la otra mitad sigue a la vista después de dejar de verse esta. */
         private const val CLOSED_CHECK_MS = 800L

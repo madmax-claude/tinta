@@ -46,19 +46,28 @@ import java.util.zip.InflaterInputStream
  *         de la nota; y después de los textos, int cantidad de widgets y por cada uno int largo y
  *         su JSON en UTF-8 (ver [Widget])
  *     desde la versión 10, al final de la cabecera: boolean hojas de costado (ver [PageLayout.horizontal])
+ *     desde la versión 12, después: int cantidad, y por cada hoja UTF nombre (vacío si no tiene) e
+ *         int fondo (el id de [com.octavio.tinta.model.Background], o -1 para el de la nota)
  *
  * La cabecera va sin comprimir y antes que los trazos, para que la lista de notas la lea sola.
  */
 object NoteFormat {
     const val MAGIC = "TINTA"
-    const val VERSION = 11
+    const val VERSION = 12
 
     /**
-     * La versión con que se guarda una nota. La 11 sólo si algún texto tiene letra propia o el
-     * recuadro lo recorta. La 10 si las hojas van de costado (el cuaderno). La 9 si tiene líneas
-     * a rayas o de puntos. Si no, la 8, que también abren las versiones anteriores de la app.
+     * La versión con que se guarda una nota. La 12 sólo si alguna hoja tiene nombre o un fondo
+     * distinto del de la nota. La 11 sólo si algún texto tiene letra propia o el recuadro lo recorta.
+     * La 10 si las hojas van de costado (el cuaderno). La 9 si tiene líneas a rayas o de puntos.
+     * Si no, la 8, que también abren las versiones anteriores de la app.
      */
-    fun versionFor(hasGroups: Boolean, horizontal: Boolean = false, richText: Boolean = false) = when {
+    fun versionFor(
+        hasGroups: Boolean,
+        horizontal: Boolean = false,
+        richText: Boolean = false,
+        sheetMeta: Boolean = false,
+    ) = when {
+        sheetMeta -> 12
         richText -> 11
         horizontal -> 10
         hasGroups -> 9
@@ -113,6 +122,14 @@ object NoteFormat {
         out.writeFloat(h.viewport.height)
         out.writeInt(h.paperColor ?: 0)
         if (h.version >= 10) out.writeBoolean(h.pages.horizontal)
+        if (h.version >= 12) {
+            val n = h.pages.sheetSlots().coerceIn(0, MAX_PAGES)
+            out.writeInt(n)
+            for (i in 0 until n) {
+                out.writeUTF(h.pages.nameOf(i).take(com.octavio.tinta.model.PageLayout.NAME_MAX))
+                out.writeInt(h.pages.paperIdOf(i))
+            }
+        }
     }
 
     fun readHeader(input: DataInputStream): Header {
@@ -136,6 +153,17 @@ object NoteFormat {
         if (version >= 6) viewport = viewport.copy(width = input.readFloat(), height = input.readFloat())
         val paperColor = if (version >= 8) input.readInt().takeIf { it != 0 } else null
         if (version >= 10) pages = pages.copy(horizontal = input.readBoolean())
+        if (version >= 12) {
+            val n = input.readInt()
+            if (n < 0 || n > MAX_PAGES) throw IOException("hojas dañadas ($n)")
+            val names = ArrayList<String>(n)
+            val papers = ArrayList<Int>(n)
+            repeat(n) {
+                names.add(input.readUTF().take(com.octavio.tinta.model.PageLayout.NAME_MAX))
+                papers.add(input.readInt())
+            }
+            pages = pages.copy(names = names.dropLastWhile { it.isBlank() }, papers = papers.dropLastWhile { it < 0 })
+        }
         return Header(title, background, created, modified, viewport, strokeCount, pages, version, paperColor)
     }
 

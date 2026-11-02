@@ -903,7 +903,21 @@ class MainActivity : TintaActivity() {
         store.io.execute {
             val n = runCatching { store.load(info.id) }.getOrNull()
             runOnUiThread {
-                if (n == null) toast("No se pudo abrir la nota", long = true) else Exporter.start(this, store, n, format) { it() }
+                if (n == null) {
+                    toast("No se pudo abrir la nota", long = true)
+                    return@runOnUiThread
+                }
+                if (format == Exporter.Format.PDF && n.pages.paged) {
+                    val box = Render.bounds(n.strokes, n.images, n.texts, n.widgets)
+                    val used = n.pages.used(if (box == null) Float.NaN else n.pages.endOf(box.right, box.bottom))
+                    if (used > 1) {
+                        Popups.pickPages(this, used, n.pages, 0) { which ->
+                            if (which.isEmpty()) toast("Marcá al menos una hoja") else Exporter.start(this, store, n, format, which) { it() }
+                        }
+                        return@runOnUiThread
+                    }
+                }
+                Exporter.start(this, store, n, format) { it() }
             }
         }
     }

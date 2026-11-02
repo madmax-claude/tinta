@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.GridLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -615,6 +616,9 @@ object Popups {
         onToggleStrip: () -> Unit,
         onAddAtEnd: () -> Unit,
         onInsert: (after: Boolean) -> Unit,
+        onDuplicate: () -> Unit,
+        onRename: () -> Unit,
+        onPagePaper: () -> Unit,
         onDelete: () -> Unit,
     ) {
         val c: Context = activity
@@ -655,11 +659,76 @@ object Popups {
             }
         }
         box.addView(action(if (stripShown) "Esconder las miniaturas" else "Mostrar las miniaturas", R.drawable.ic_pages, run = onToggleStrip), topMargin(c, 6f))
+        box.addView(action("Nombrar esta hoja", R.drawable.ic_pages, run = onRename))
+        box.addView(action("Duplicar esta hoja", R.drawable.ic_add, run = onDuplicate))
+        box.addView(action("Cambiar el fondo de esta hoja", R.drawable.ic_pages, run = onPagePaper))
         box.addView(action("Agregar una hoja al final", R.drawable.ic_add, run = onAddAtEnd))
         box.addView(action("Insertar una hoja después de esta", R.drawable.ic_add) { onInsert(true) })
         box.addView(action("Insertar una hoja antes de esta", R.drawable.ic_add) { onInsert(false) })
         box.addView(action("Borrar esta hoja…", R.drawable.ic_delete, 0xFFD93025.toInt(), onDelete))
-        popup = show(activity, anchor, box, 340f)
+        popup = show(activity, anchor, box, 360f)
+    }
+
+    /** Elige el fondo de una hoja (para insertarla o cambiar sólo esa). */
+    fun backgrounds(activity: Activity, anchor: View, title: String, current: Background, dark: Boolean, onPick: (Background) -> Unit) {
+        val c: Context = activity
+        val box = column(c)
+        lateinit var popup: PopupWindow
+        box.addView(label(c, title, 15f))
+        val grid = GridLayout(c).apply { columnCount = 4 }
+        box.addView(grid, topMargin(c, 8f))
+        for (bg in Background.entries) {
+            val cell = LinearLayout(c).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                background = c.getDrawable(R.drawable.bg_tool)
+                isSelected = bg == current
+                val p = c.dp(6f).toInt()
+                setPadding(p, p, p, p)
+                addView(PaperSample(c, bg, dark), LinearLayout.LayoutParams(c.dp(104f).toInt(), c.dp(72f).toInt()))
+                addView(label(c, bg.label, 12f).apply { gravity = Gravity.CENTER })
+                setOnClickListener {
+                    popup.dismiss()
+                    onPick(bg)
+                }
+            }
+            grid.addView(cell, GridLayout.LayoutParams().apply { width = c.dp(122f).toInt() })
+        }
+        popup = show(activity, anchor, box, 520f)
+    }
+
+    /**
+     * Qué hojas van a un PDF. La `current` empieza marcada. "Todas" exporta el rango entero.
+     * `onPick` recibe los índices, de la primera a la última usada.
+     */
+    fun pickPages(activity: Activity, count: Int, pages: com.octavio.tinta.model.PageLayout, current: Int, onPick: (List<Int>) -> Unit) {
+        val c: Context = activity
+        val box = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        val checks = ArrayList<CheckBox>(count)
+        for (k in 0 until count) {
+            val name = pages.nameOf(k)
+            val check = CheckBox(c).apply {
+                text = if (name.isEmpty()) "Hoja ${k + 1}" else "Hoja ${k + 1} · $name"
+                isChecked = k == current.coerceIn(0, count - 1)
+            }
+            checks.add(check)
+            box.addView(check)
+        }
+        val scroll = ScrollView(c).apply {
+            addView(box)
+            val pad = c.dp(8f).toInt()
+            setPadding(pad, 0, pad, 0)
+        }
+        android.app.AlertDialog.Builder(activity)
+            .setTitle("Exportar PDF")
+            .setMessage("Marcá las hojas que van al PDF.")
+            .setView(scroll)
+            .setPositiveButton("Exportar") { _, _ ->
+                onPick(checks.mapIndexedNotNull { i, b -> if (b.isChecked) i else null })
+            }
+            .setNeutralButton("Todas") { _, _ -> onPick((0 until count).toList()) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     /**

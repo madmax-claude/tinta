@@ -184,7 +184,9 @@ class NoteStore private constructor(context: Context) {
             try {
                 val bos = BufferedOutputStream(fos, 1 shl 16)
                 val richText = texts.any { it.font != NoteText.DEFAULT_FONT || it.clip }
-                val version = NoteFormat.versionFor(strokes.any { it.group != 0L }, header.pages.horizontal, richText)
+                val version = NoteFormat.versionFor(
+                    strokes.any { it.group != 0L }, header.pages.horizontal, richText, header.pages.hasSheetMeta(),
+                )
                 NoteFormat.writeHeader(DataOutputStream(bos), header.copy(version = version, strokeCount = strokes.size))
                 val compressed = DeflaterOutputStream(bos, deflater, 1 shl 16)
                 // Sin búfer, DataOutputStream le pasa al compresor un byte por vez.
@@ -198,7 +200,8 @@ class NoteStore private constructor(context: Context) {
                         ),
                     )
                 }
-                NoteFormat.writeElements(out, images, texts, widgets, richText)
+                // La 12 también lleva la letra y el recorte de cada texto: quien la lee mira la versión.
+                NoteFormat.writeElements(out, images, texts, widgets, version >= 11)
                 if (version >= 9) NoteFormat.writeGroups(out, strokes.map { it.group })
                 out.flush()
                 compressed.finish()

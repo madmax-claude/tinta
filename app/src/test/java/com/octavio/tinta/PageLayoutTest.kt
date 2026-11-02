@@ -1,5 +1,6 @@
 package com.octavio.tinta
 
+import com.octavio.tinta.model.Background
 import com.octavio.tinta.model.PageLayout
 import com.octavio.tinta.model.PageSize
 import org.junit.Assert.assertEquals
@@ -73,5 +74,36 @@ class PageLayoutTest {
         assertEquals(300f - PageLayout.MARGIN, p.left, 0f)
         assertEquals(-20f - PageLayout.MARGIN, p.top, 0f)
         assertEquals(0f, PageLayout.around(PageSize.A4, false, Float.NaN, Float.NaN).left, 0f)
+    }
+
+    @Test
+    fun namesAndPapersMoveWithThePage() {
+        val p = PageLayout(PageSize.A4, names = listOf("Uno", "Dos"), papers = listOf(-1, Background.LINES.id))
+        assertEquals("Uno", p.nameOf(0))
+        assertEquals("", p.nameOf(4))
+        assertEquals(Background.GRID, p.paperOf(0, Background.GRID))
+        assertEquals(Background.LINES, p.paperOf(1, Background.GRID))
+        assertTrue(p.hasSheetMeta())
+        assertFalse(PageLayout(PageSize.A4).hasSheetMeta())
+
+        val inserted = p.remapSheets(3, { if (it < 1) it else it + 1 }, fill = 1 to Background.DOTS.id)
+        assertEquals("Uno", inserted.nameOf(0))
+        assertEquals("", inserted.nameOf(1))
+        assertEquals("Dos", inserted.nameOf(2))
+        assertEquals(Background.DOTS.id, inserted.paperIdOf(1))
+        assertEquals(Background.LINES.id, inserted.paperIdOf(2))
+        assertEquals(3, inserted.minPages)
+
+        val copy = p.remapSheets(3, { if (it < 0) it else it + 1 }, copyFrom = setOf(0))
+        assertEquals("Uno", copy.nameOf(0))
+        assertEquals("Uno", copy.nameOf(1))
+        assertEquals("Dos", copy.nameOf(2))
+        assertEquals(-1, copy.paperIdOf(0))
+        assertEquals(Background.LINES.id, copy.paperIdOf(2))
+
+        val deleted = p.remapSheets(1, { if (it == 0) null else it - 1 })
+        assertEquals("Dos", deleted.nameOf(0))
+        assertEquals(Background.LINES, deleted.paperOf(0, Background.GRID))
+        assertEquals("", deleted.nameOf(1))
     }
 }

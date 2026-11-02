@@ -97,8 +97,10 @@ object Render {
         background: Background,
         pages: PageLayout,
         paperColor: Int? = null,
+        /** Hojas a exportar, de las usadas. Null: todas. */
+        only: List<Int>? = null,
     ): File {
-        if (pages.paged) return pagedPdf(context, title, strokes, images, texts, widgets, background, pages, paperColor)
+        if (pages.paged) return pagedPdf(context, title, strokes, images, texts, widgets, background, pages, paperColor, only)
         val b = bounds(strokes, images, texts, widgets) ?: RectF(0f, 0f, 595f - 2 * MARGIN, 842f - 2 * MARGIN)
         val w = b.width() + 2 * MARGIN
         val h = b.height() + 2 * MARGIN
@@ -129,9 +131,12 @@ object Render {
         background: Background,
         pages: PageLayout,
         paperColor: Int?,
+        only: List<Int>?,
     ): File {
         val box = bounds(strokes, images, texts, widgets)
         val used = pages.used(if (box == null) Float.NaN else pages.endOf(box.right, box.bottom))
+        val chosen = (only ?: (0 until used).toList()).filter { it in 0 until used }.distinct()
+        val sheets = if (chosen.isEmpty()) (0 until used).toList() else chosen
         // 160 dp por pulgada, 72 pt por pulgada: la hoja sale del tamaño real.
         val scale = 72f / 160f
         val pageWidth = (pages.width * scale).toInt()
@@ -139,8 +144,8 @@ object Render {
         val paper = Paper(vector = true, color = paperColor)
         val doc = PdfDocument()
         try {
-            for (k in 0 until used) {
-                val page = doc.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, k + 1).create())
+            for ((n, k) in sheets.withIndex()) {
+                val page = doc.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, n + 1).create())
                 val tx = -pages.pageLeft(k) * scale
                 val ty = -pages.pageTop(k) * scale
                 draw(page.canvas, strokes, images, texts, widgets, 3000, background, pages, used, scale, tx, ty, pageWidth.toFloat(), pageHeight.toFloat(), paper)

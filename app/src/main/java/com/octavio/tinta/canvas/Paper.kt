@@ -80,8 +80,9 @@ class Paper(vector: Boolean = false, color: Int? = null) {
             canvas.drawRect(l, t, r, b, fill)
             val save = canvas.save()
             canvas.clipRect(max(l, 0f), max(t, 0f), min(r, width), min(b, height))
-            // El dibujo empieza en la esquina de la hoja: el mismo en todas.
-            pattern(canvas, background, scale, l, t, width, height, dark, pages.copy(left = 0f, top = 0f, horizontal = false))
+            // El dibujo empieza en la esquina de esta hoja. Cada una puede tener su fondo.
+            val sheet = pages.paperOf(k, background)
+            pattern(canvas, sheet, scale, l, t, width, height, dark, pages.copy(left = 0f, top = 0f, horizontal = false))
             canvas.restoreToCount(save)
         }
     }

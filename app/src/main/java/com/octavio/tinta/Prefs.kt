@@ -26,6 +26,18 @@ class Prefs(context: Context) {
         get() = p.getInt("pen", 0)
         set(v) = p.edit { putInt("pen", v) }
 
+    /** Los últimos lápices usados, el más reciente primero. Vacío si todavía no hay. */
+    var recentPens: List<Pen>
+        get() {
+            val raw = p.getString("recentPens", null) ?: return emptyList()
+            if (raw.isEmpty()) return emptyList()
+            return runCatching {
+                val a = org.json.JSONArray(raw)
+                (0 until a.length()).map { Pen.fromJson(a.getJSONObject(it)) }
+            }.getOrDefault(emptyList())
+        }
+        set(v) = p.edit { putString("recentPens", if (v.isEmpty()) "" else Pen.listToJson(v)) }
+
     /** Lo elegido en la barra: lápiz, borrador o lazo. */
     var mode: NoteCanvasView.Mode
         get() = NoteCanvasView.Mode.entries.getOrNull(p.getInt("mode", -1))

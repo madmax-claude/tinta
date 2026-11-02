@@ -39,6 +39,16 @@ data class PageLayout(
     val minPages: Int = 0,
     /** Hojas de costado, como un cuaderno. Si no, una debajo de la otra. */
     val horizontal: Boolean = false,
+    /**
+     * Nombre de cada hoja. Las que no están, o están en blanco, no tienen. Se guarda sólo si alguna
+     * tiene nombre o un fondo propio (versión 12).
+     */
+    val names: List<String> = emptyList(),
+    /**
+     * Fondo de cada hoja, como [Background.id], o -1 para el de la nota. Las que no están usan el
+     * de la nota.
+     */
+    val papers: List<Int> = emptyList(),
 ) {
     val paged get() = size != PageSize.INFINITE
     private val baseWidth get() = if (size == PageSize.CUSTOM) customWidth else size.widthMm
@@ -83,6 +93,78 @@ data class PageLayout(
     fun used(contentEnd: Float): Int =
         max(minPages, if (contentEnd.isNaN()) 1 else max(1, pageAt(contentEnd) + 1))
 
+    /** El nombre de la hoja `k`, o vacío si no tiene. */
+    fun nameOf(k: Int): String = names.getOrNull(k)?.trim().orEmpty()
+
+    /** El fondo guardado de la hoja `k`, o -1 si usa el de la nota. */
+    fun paperIdOf(k: Int): Int = papers.getOrNull(k) ?: -1
+
+    /** El fondo de la hoja `k`: el suyo, o `fallback` si usa el de la nota. */
+    fun paperOf(k: Int, fallback: Background): Background {
+        val id = paperIdOf(k)
+        return if (id < 0) fallback else Background.fromId(id)
+    }
+
+    /** Hay un nombre o un fondo propio: hay que guardarlo aparte. */
+    fun hasSheetMeta(): Boolean = names.any { it.isNotBlank() } || papers.any { it >= 0 }
+
+    /** Cuántas entradas guardar: hasta la última con nombre o fondo propio. */
+    fun sheetSlots(): Int {
+        val named = names.indexOfLast { it.isNotBlank() }
+        val paper = papers.indexOfLast { it >= 0 }
+        return max(named, paper) + 1
+    }
+
+    /** La misma disposición, con otro nombre en la hoja `k` (vacío se lo saca). */
+    fun withName(k: Int, name: String): PageLayout {
+        if (k < 0) return this
+        val list = names.toMutableList()
+        while (list.size <= k) list.add("")
+        list[k] = name.trim().take(NAME_MAX)
+        return copy(names = trimmedNames(list))
+    }
+
+    /** La misma disposición, con el fondo `paper` en la hoja `k` (null: el de la nota). */
+    fun withPaper(k: Int, paper: Background?): PageLayout {
+        if (k < 0) return this
+        val list = papers.toMutableList()
+        while (list.size <= k) list.add(-1)
+        list[k] = paper?.id ?: -1
+        return copy(papers = trimmedPapers(list))
+    }
+
+    /**
+     * Nombres y fondos reordenados como el contenido: lo de la hoja `p` pasa a `newPage(p)` (null:
+     * se borra). Si `p` está en `copyFrom`, además se queda. `fill` es el fondo de una hoja nueva
+     * que nadie ocupaba (al insertar). `newCount` pasa a ser [minPages].
+     */
+    fun remapSheets(
+        newCount: Int,
+        newPage: (Int) -> Int?,
+        copyFrom: Set<Int> = emptySet(),
+        fill: Pair<Int, Int>? = null,
+    ): PageLayout {
+        val n = newCount.coerceAtLeast(1)
+        val namesOut = MutableList(n) { "" }
+        val papersOut = MutableList(n) { -1 }
+        val span = max(names.size, papers.size)
+        for (p in 0 until span) {
+            val name = names.getOrElse(p) { "" }
+            val paper = papers.getOrElse(p) { -1 }
+            val q = newPage(p)
+            if (q != null && q in 0 until n) {
+                namesOut[q] = name
+                papersOut[q] = paper
+            }
+            if (p in copyFrom && p in 0 until n) {
+                namesOut[p] = name
+                papersOut[p] = paper
+            }
+        }
+        fill?.let { (i, id) -> if (i in 0 until n) papersOut[i] = id }
+        return copy(minPages = n, names = trimmedNames(namesOut), papers = trimmedPapers(papersOut))
+    }
+
     companion object {
         const val GAP = 32f
 
@@ -91,6 +173,19 @@ data class PageLayout(
 
         /** Margen que se deja entre lo escrito y el borde al pasar una nota infinita a hojas. */
         const val MARGIN = 48f
+
+        /** Largo máximo del nombre de una hoja. */
+        const val NAME_MAX = 48
+
+        private fun trimmedNames(list: List<String>): List<String> {
+            val end = list.indexOfLast { it.isNotBlank() }
+            return if (end < 0) emptyList() else list.take(end + 1)
+        }
+
+        private fun trimmedPapers(list: List<Int>): List<Int> {
+            val end = list.indexOfLast { it >= 0 }
+            return if (end < 0) emptyList() else list.take(end + 1)
+        }
 
         /**
          * Hojas para una nota que ya tiene algo escrito dentro de (l, t, r, b): la primera empieza un
