@@ -592,15 +592,23 @@ class EditorActivity :
 
     /** El botón lateral: al borrador, y de nuevo al primer lápiz de la barra. */
     override fun onStylusButtonClick() {
-        leaveTextTool()
-        if (mode == Mode.ERASER) {
-            selected = 0
-            mode = Mode.PEN
-        } else {
+        if (mode == Mode.ERASER) backToFirstPen()
+        else {
+            leaveTextTool()
             mode = Mode.ERASER
+            applyTool()
         }
+    }
+
+    /** Sale del borrador y deja elegido el primer lápiz de la barra. */
+    private fun backToFirstPen() {
+        leaveTextTool()
+        selected = 0
+        mode = Mode.PEN
         applyTool()
     }
+
+    override fun onEraserEmptyTap() = backToFirstPen()
 
     override fun recentPens(): List<Pen> {
         // La copia guardada deja afuera un lápiz si después le cambiaste la línea recta u otra
