@@ -675,10 +675,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** Círculo alrededor de donde se apoyó la punta, con los últimos lápices. */
     private class PenWheel(val cx: Float, val cy: Float, val pens: List<Pen>, var index: Int)
 
-    /** La punta sigue apoyada y cerca de donde se apoyó: abre el círculo. */
+    /** La punta sigue apoyada, quieta en el mismo punto: abre el círculo. Si escribió, no. */
     private fun openPenWheelFromHold() {
-        if (penPointer == NONE || penWheel != null || erasing || mode != Mode.PEN) return
-        if (hypot(penX - wheelFromX, penY - wheelFromY) > WHEEL_SLOP * density) return
+        if (penPointer == NONE || penWheel != null || erasing || mode != Mode.PEN || penMoved) return
+        if (hypot(penX - wheelFromX, penY - wheelFromY) > HOLD_SLOP * density) return
         if (openPenWheel(wheelFromX, wheelFromY)) removeCallbacks(hold)
     }
 
@@ -1302,9 +1302,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penX = sx
         penY = sy
         if (shape == null) addTrace(sx, sy, pressure)
-        if (hypot(sx - wheelFromX, sy - wheelFromY) > WHEEL_SLOP * density) removeCallbacks(wheelHold)
+        // Apenas sale del punto donde se apoyó, está escribiendo: el círculo no se abre en este trazo.
+        if (penMoved || hypot(sx - wheelFromX, sy - wheelFromY) > HOLD_SLOP * density) removeCallbacks(wheelHold)
         if (hypot(sx - holdX, sy - holdY) <= HOLD_SLOP * density) return
-        // Se movió: el reloj vuelve a empezar desde acá.
+        // Se movió: el reloj de la figura vuelve a empezar desde acá. El del círculo, no.
         holdX = sx
         holdY = sy
         if (!penMoved && selection != null && mode == Mode.PEN) {
@@ -1312,6 +1313,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             listener?.onSelectionChanged()
         }
         penMoved = true
+        removeCallbacks(wheelHold)
         removeCallbacks(hold)
         if (holdForShapes && shape == null && penStroke != null) postDelayed(hold, SHAPE_HOLD_MS)
     }
@@ -3915,11 +3917,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         const val OVERVIEW_EVERY_MS = 20_000L
         const val PALM_GRACE_MS = 400L
 
-        /** La punta quieta este tiempo abre el círculo de los últimos lápices. */
+        /** La punta quieta, en el mismo punto, este tiempo abre el círculo de los últimos lápices. */
         const val WHEEL_HOLD_MS = 500L
-
-        /** Si la punta se va más que esto (dp) de donde se apoyó, no es para el círculo. */
-        const val WHEEL_SLOP = 24f
 
         /** Tiempo por cuadro para grabar tandas de trazos que no corren prisa. */
         const val CHUNK_BUDGET_NS = 6_000_000L
