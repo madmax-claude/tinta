@@ -394,7 +394,7 @@ object Popups {
         })
         box.addView(seek)
         box.addView(dot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, c.dp(130f).toInt()))
-        box.addView(hint(c, "El botón del lápiz pasa al borrador; otro toque vuelve al primer lápiz de la barra. Si apoyás la punta y la dejás quieta medio segundo, aparece un círculo con los últimos lápices."), topMargin(c, 8f))
+        box.addView(hint(c, "El botón del lápiz pasa al borrador; otro toque vuelve al primer lápiz de la barra. Si apoyás la punta y la dejás quieta medio segundo, aparece un círculo: el borrador en el medio y los lápices alrededor."), topMargin(c, 8f))
         box.addView(
             Button(c, null, 0, android.R.style.Widget_DeviceDefault_Button_Borderless_Colored).apply {
                 text = "Borrar toda la nota…"

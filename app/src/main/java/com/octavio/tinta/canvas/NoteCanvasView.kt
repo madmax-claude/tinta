@@ -113,11 +113,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** Un toque del botón lateral: al borrador, o de vuelta al primer lápiz. */
         fun onStylusButtonClick() = Unit
 
-        /** Los últimos lápices, para el círculo que aparece al dejar la punta quieta. */
+        /** Los lápices de la barra, para el círculo que aparece al dejar la punta quieta. */
         fun recentPens(): List<Pen> = emptyList()
 
         /** Eligió uno de esos lápices en el círculo. */
         fun onPickRecentPen(pen: Pen) = Unit
+
+        /** Soltó en el medio del círculo: el borrador. */
+        fun onPickEraser() = Unit
 
         /** Tocaron un audio o un video: hay que reproducirlo. */
         fun onMediaTap(media: Media) = Unit
@@ -679,11 +682,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (openPenWheel(wheelFromX, wheelFromY)) removeCallbacks(hold)
     }
 
-    /** Abre el círculo en (x, y) de la pantalla. False si no hay al menos dos lápices. */
+    /** Abre el círculo en (x, y) de la pantalla. En el medio queda el borrador. */
     private fun openPenWheel(x: Float, y: Float): Boolean {
         if (penWheel != null) return true
         val list = listener?.recentPens().orEmpty().distinct().take(8)
-        if (list.size < 2) return false
         penStroke?.let {
             activeWet().cancelStroke(it)
             strokePens.remove(it)
@@ -702,8 +704,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val w = penWheel ?: return
         val dx = x - w.cx
         val dy = y - w.cy
-        val inner = 36f * density
-        val index = if (hypot(dx, dy) < inner) {
+        // Adentro: el borrador. Afuera, el lápiz del sector hacia el que apunta la punta.
+        val inner = 40f * density
+        val index = if (w.pens.isEmpty() || hypot(dx, dy) < inner) {
             -1
         } else {
             val n = w.pens.size
@@ -713,7 +716,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         if (index == w.index) return
         w.index = index
-        if (index >= 0) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         dry.invalidate()
     }
 
@@ -722,12 +725,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val picked = w.index.takeIf { it in w.pens.indices }?.let { w.pens[it] }
         penWheel = null
         dry.invalidate()
-        if (picked != null) listener?.onPickRecentPen(picked)
+        if (picked != null) listener?.onPickRecentPen(picked) else listener?.onPickEraser()
     }
 
     private val wheelFill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val wheelRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val wheelDot = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var eraserIcon: android.graphics.drawable.Drawable? = null
 
     private fun drawPenWheel(canvas: Canvas) {
         val w = penWheel ?: return
@@ -737,11 +741,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         wheelRing.color = 0xFFFFFFFF.toInt()
         wheelRing.strokeWidth = 2f * density
         canvas.drawCircle(w.cx, w.cy, radius, wheelRing)
-        wheelRing.strokeWidth = 1.5f * density
-        canvas.drawCircle(w.cx, w.cy, 36f * density, wheelRing)
         val n = w.pens.size
-        val dot = 18f * density
-        val orbit = radius * 0.68f
+        val dot = 16f * density
+        val orbit = radius * 0.72f
         for (i in w.pens.indices) {
             val angle = -Math.PI / 2.0 + 2.0 * Math.PI * i / n
             val x = w.cx + (orbit * cos(angle)).toFloat()
@@ -758,7 +760,32 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             wheelRing.color = if (i == w.index) 0xFFFFFFFF.toInt() else 0x66000000
             wheelRing.strokeWidth = if (i == w.index) 3f * density else 1.5f * density
             canvas.drawCircle(x, y, rad, wheelRing)
+            // La raya de abajo es la del modo línea recta, como en la barra.
+            if (p.straight) {
+                wheelRing.color = 0xFFFFFFFF.toInt()
+                wheelRing.strokeWidth = 2.5f * density
+                val ly = y + rad + 4f * density
+                canvas.drawLine(x - rad * 0.65f, ly, x + rad * 0.65f, ly, wheelRing)
+            }
         }
+        drawWheelEraser(canvas, w.cx, w.cy, w.index < 0)
+    }
+
+    /** El borrador, en el medio. `on` cuando la punta sigue ahí. */
+    private fun drawWheelEraser(canvas: Canvas, cx: Float, cy: Float, on: Boolean) {
+        val r = (if (on) 28f else 24f) * density
+        wheelDot.color = if (on) 0xFFFFFFFF.toInt() else 0xFFE8E8E8.toInt()
+        canvas.drawCircle(cx, cy, r, wheelDot)
+        wheelRing.color = if (on) 0xFFFFFFFF.toInt() else 0x99000000.toInt()
+        wheelRing.strokeWidth = if (on) 3f * density else 1.5f * density
+        canvas.drawCircle(cx, cy, r, wheelRing)
+        val icon = eraserIcon ?: context.getDrawable(R.drawable.ic_eraser)?.also { eraserIcon = it } ?: return
+        val s = (r * 1.05f).toInt()
+        val left = (cx - s / 2f).toInt()
+        val top = (cy - s / 2f).toInt()
+        icon.setTint(0xFF202020.toInt())
+        icon.setBounds(left, top, left + s, top + s)
+        icon.draw(canvas)
     }
 
     /**

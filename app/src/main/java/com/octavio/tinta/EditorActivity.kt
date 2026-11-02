@@ -603,9 +603,21 @@ class EditorActivity :
     }
 
     override fun recentPens(): List<Pen> {
-        val used = prefs.recentPens.filter { it in pens }
-        if (used.size >= 2) return used.take(8)
-        return (used + pens.filter { it !in used }).distinct().take(8)
+        // La copia guardada deja afuera un lápiz si después le cambiaste la línea recta u otra
+        // opción. Acá se usa el lápiz de ahora, y entran todos los de la barra.
+        fun same(saved: Pen, current: Pen) =
+            saved == current || (
+                saved.tool == current.tool && saved.color == current.color && saved.size == current.size &&
+                    saved.dash == current.dash && saved.opacity == current.opacity &&
+                    saved.sensitivity == current.sensitivity
+                )
+        val picked = ArrayList<Pen>()
+        for (saved in prefs.recentPens) {
+            val current = pens.firstOrNull { it == saved } ?: pens.firstOrNull { same(saved, it) } ?: continue
+            if (current !in picked) picked.add(current)
+        }
+        for (p in pens) if (p !in picked) picked.add(p)
+        return picked.take(8)
     }
 
     override fun onPickRecentPen(pen: Pen) {
@@ -614,6 +626,12 @@ class EditorActivity :
         leaveTextTool()
         selected = i
         mode = Mode.PEN
+        applyTool()
+    }
+
+    override fun onPickEraser() {
+        leaveTextTool()
+        mode = Mode.ERASER
         applyTool()
     }
 
