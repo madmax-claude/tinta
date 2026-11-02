@@ -111,12 +111,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** Un toque del botón lateral: al borrador, o de vuelta al primer lápiz. */
         fun onStylusButtonClick() = Unit
 
-        /** La punta quedó quieta medio segundo: el borrador. */
-        fun onPickEraser() = Unit
-
-        /** Un toque del borrador en un lugar vacío de la hoja: volver al primer lápiz. */
-        fun onEraserEmptyTap() = Unit
-
         /** Tocaron un audio o un video: hay que reproducirlo. */
         fun onMediaTap(media: Media) = Unit
 
@@ -285,14 +279,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private val erased = ArrayList<Pair<Int, InkStroke>>()
     private var eraseX = 0f
     private var eraseY = 0f
-
-    /** Dónde se apoyó el borrador, en pantalla, y si se movió: un toque quieto en vacío sale del borrador. */
-    private var eraseTapX = 0f
-    private var eraseTapY = 0f
-    private var eraseMoved = false
-
-    /** Este apoyo eligió el borrador por quedarse quieto: al soltar no cuenta como toque en vacío. */
-    private var holdPickedEraser = false
 
     /** Línea recta en curso (resaltador recto), en el mundo, con su vista previa. */
     private var lineStart: PointF? = null
@@ -658,13 +644,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private var eraserFromX = 0f
     private var eraserFromY = 0f
 
-    /** Medio segundo quieto en el mismo punto: el borrador, sin soltar. Si escribió, no. */
+    /** Medio segundo quieto en el mismo punto: borra hasta soltar, y al soltar sigue el lápiz. Si escribió, no. */
     private val eraserHold = Runnable { pickEraserFromHold() }
 
     private fun pickEraserFromHold() {
-        if (penPointer == NONE || erasing || mode != Mode.PEN || penMoved) return
+        if (penPointer == NONE || erasing || mode != Mode.PEN || penMoved || !holdToErase) return
         if (hypot(penX - eraserFromX, penY - eraserFromY) > HOLD_SLOP * density) return
-        // El punto que alcanzó a empezar no queda: a partir de acá es el borrador.
+        // El punto que alcanzó a empezar no queda. No cambia la herramienta: al levantar la punta se escribe de nuevo.
         penStroke?.let {
             activeWet().cancelStroke(it)
             strokePens.remove(it)
@@ -673,10 +659,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         lineStart = null
         linePreview = null
         penMoved = true
-        holdPickedEraser = true
         removeCallbacks(hold)
-        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        listener?.onPickEraser()
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        startErase(penX, penY)
     }
 
     /**
@@ -784,7 +769,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         removeCallbacks(fingerHold)
         tapPointer = NONE
         penPointer = id
-        holdPickedEraser = false
         lastPenSeen = e.eventTime
         logButtons(e)
         if (wantsEraser(e, i)) {
@@ -866,7 +850,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             return
         }
         if (erasing) {
-            if (hypot(e.getX(i) - eraseTapX, e.getY(i) - eraseTapY) > TAP_SLOP * density) eraseMoved = true
             for (h in 0 until e.historySize) {
                 eraseTo(inX(e.getHistoricalX(i, h)), inY(e.getHistoricalY(i, h)))
             }
@@ -1020,7 +1003,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             lassoPath = null
             dry.invalidate()
         }
-        if (erasing) endErase(allowEmptyTap = !canceled)
+        if (erasing) endErase()
         if (capturing) endCapture(canceled)
         penPointer = NONE
         penStroke = null
@@ -1170,7 +1153,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         eraserFromX = holdX
         eraserFromY = holdY
         removeCallbacks(eraserHold)
-        postDelayed(eraserHold, ERASER_HOLD_MS)
+        if (holdToErase) postDelayed(eraserHold, ERASER_HOLD_MS)
     }
 
     private fun trackHold(e: MotionEvent, i: Int) {
@@ -1451,9 +1434,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         erasing = true
         erased.clear()
         cutEdits.clear()
-        eraseTapX = sx
-        eraseTapY = sy
-        eraseMoved = false
         eraseX = inX(sx)
         eraseY = inY(sy)
         setCursor(PointF(sx, sy))
@@ -1535,9 +1515,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         return rebuild(s, stroke, parts)
     }
 
-    private fun endErase(allowEmptyTap: Boolean = false) {
-        val backToPen = allowEmptyTap && !holdPickedEraser && mode == Mode.ERASER && !eraseMoved &&
-            erased.isEmpty() && cutEdits.isEmpty() && onBlankPaper(eraseX, eraseY)
+    private fun endErase() {
         erasing = false
         if (erased.isNotEmpty()) listener?.onStrokesErased(ArrayList(erased))
         erased.clear()
@@ -1546,28 +1524,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         cutGroups.clear()
         if (cutEdits.isNotEmpty()) listener?.onEdited(History.Group(ArrayList(cutEdits)))
         cutEdits.clear()
-        if (backToPen) {
-            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-            listener?.onEraserEmptyTap()
-        }
         setCursor(hover?.takeIf { wantsEraserNow() }) // si el lápiz sigue cerca, sigue el cursor
-    }
-
-    /** El punto está en la hoja y el borrador no toca una imagen, un texto ni un widget. */
-    private fun onBlankPaper(x: Float, y: Float): Boolean {
-        if (pages.paged) {
-            val k = pages.pageOf(x, y)
-            if (k < 0) return false
-            val l = pages.pageLeft(k)
-            val t = pages.pageTop(k)
-            if (x < l || y < t || x > l + pages.width || y > t + pages.height) return false
-        }
-        val r = eraserRadius * density / inScale
-        val box = RectF(x - r, y - r, x + r, y + r)
-        if (images.any { RectF.intersects(Elements.imageBounds(it), box) }) return false
-        if (texts.any { RectF.intersects(Elements.textBounds(it), box) }) return false
-        if (widgets.any { it.right >= box.left && it.left <= box.right && it.bottom >= box.top && it.top <= box.bottom }) return false
-        return true
     }
 
     private fun setCursor(p: PointF?) {

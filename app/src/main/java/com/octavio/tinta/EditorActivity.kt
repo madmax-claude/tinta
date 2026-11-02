@@ -612,14 +612,6 @@ class EditorActivity :
         applyTool()
     }
 
-    override fun onEraserEmptyTap() = backToFirstPen()
-
-    override fun onPickEraser() {
-        leaveTextTool()
-        mode = Mode.ERASER
-        applyTool()
-    }
-
     override fun onMediaTap(media: Media) = play(media)
 
     override fun onPagesChanged(pages: PageLayout) {
