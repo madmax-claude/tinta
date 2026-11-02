@@ -70,12 +70,10 @@ import java.util.concurrent.FutureTask
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ceil
-import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
 
 /**
  * Lienzo infinito, o de hojas una debajo de otra. El lápiz (y el mouse, útil en el emulador)
@@ -113,13 +111,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** Un toque del botón lateral: al borrador, o de vuelta al primer lápiz. */
         fun onStylusButtonClick() = Unit
 
-        /** Los lápices de la barra, para el círculo que aparece al dejar la punta quieta. */
-        fun recentPens(): List<Pen> = emptyList()
-
-        /** Eligió uno de esos lápices en el círculo. */
-        fun onPickRecentPen(pen: Pen) = Unit
-
-        /** Soltó en el medio del círculo: el borrador. */
+        /** La punta quedó quieta medio segundo: el borrador. */
         fun onPickEraser() = Unit
 
         /** Un toque del borrador en un lugar vacío de la hoja: volver al primer lápiz. */
@@ -370,7 +362,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         super.onDetachedFromWindow()
         removeCallbacks(merge)
         removeCallbacks(hold)
-        cancelWheelTimers()
+        removeCallbacks(eraserHold)
         removeCallbacks(lassoHold)
         removeCallbacks(fingerHold)
         runCatching { (context as? Activity)?.window?.removeOnFrameMetricsAvailableListener(frameMetrics) }
@@ -612,7 +604,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (isPen(e, 0)) {
             val near = e.actionMasked != MotionEvent.ACTION_HOVER_EXIT
             hover = if (near) PointF(e.x, e.y) else null
-            if (near) notePenTip(e.x, e.y)
             setCursor(if (near && wantsEraser(e, 0)) PointF(e.x, e.y) else null)
             logButtons(e)
         }
@@ -657,65 +648,23 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private fun stylusButton(time: Long) {
         if (time - lastButtonAt < 350L) return
         lastButtonAt = time
-        if (penWheel != null) {
-            penWheel = null
-            dry.invalidate()
-        }
         listener?.onStylusButtonClick()
     }
 
     /** El botón lateral cuando llega como tecla (el lápiz o su control por Bluetooth). */
     fun penButton(down: Boolean, time: Long) = stylusButton(time)
 
-    private var penTipX = Float.NaN
-    private var penTipY = Float.NaN
-    private var penWheel: PenWheel? = null
+    /** Dónde se apoyó la punta, para pasar al borrador si se queda quieta. */
+    private var eraserFromX = 0f
+    private var eraserFromY = 0f
 
-    /** Dónde se apoyó la punta, para el círculo si se queda quieta. */
-    private var wheelFromX = 0f
-    private var wheelFromY = 0f
-
-    private fun notePenTip(x: Float, y: Float) {
-        penTipX = x
-        penTipY = y
-        if (penWheel != null) aimPenWheel(x, y)
-    }
-
-    private val wheelHold = Runnable { openPenWheelFromHold() }
-
-    /** Si al medio segundo la punta sigue en el medio del círculo, elige el borrador sin soltar. */
+    /** Medio segundo quieto en el mismo punto: el borrador, sin soltar. Si escribió, no. */
     private val eraserHold = Runnable { pickEraserFromHold() }
 
-    private fun cancelWheelTimers() {
-        removeCallbacks(wheelHold)
-        removeCallbacks(eraserHold)
-    }
-
-    /** Círculo alrededor de donde se apoyó la punta, con los últimos lápices. */
-    private class PenWheel(val cx: Float, val cy: Float, val pens: List<Pen>, var index: Int)
-
-    /** La punta sigue apoyada, quieta en el mismo punto: abre el círculo. Si escribió, no. */
-    private fun openPenWheelFromHold() {
-        if (penPointer == NONE || penWheel != null || erasing || mode != Mode.PEN || penMoved) return
-        if (hypot(penX - wheelFromX, penY - wheelFromY) > HOLD_SLOP * density) return
-        if (openPenWheel(wheelFromX, wheelFromY)) removeCallbacks(hold)
-    }
-
-    /** El medio segundo se cumplió en el centro: borrador. El círculo se cierra y el próximo movimiento borra. */
     private fun pickEraserFromHold() {
-        val w = penWheel ?: return
-        if (penPointer == NONE || w.index >= 0) return
-        penWheel = null
-        holdPickedEraser = true
-        dry.invalidate()
-        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        listener?.onPickEraser()
-    }
-
-    /** Abre el círculo en (x, y) de la pantalla. En el medio queda el borrador. */
-    private fun openPenWheel(x: Float, y: Float): Boolean {
-        if (penWheel != null) return true
-        val list = listener?.recentPens().orEmpty().distinct().take(8)
+        if (penPointer == NONE || erasing || mode != Mode.PEN || penMoved) return
+        if (hypot(penX - eraserFromX, penY - eraserFromY) > HOLD_SLOP * density) return
+        // El punto que alcanzó a empezar no queda: a partir de acá es el borrador.
         penStroke?.let {
             activeWet().cancelStroke(it)
             strokePens.remove(it)
@@ -724,100 +673,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         lineStart = null
         linePreview = null
         penMoved = true
-        penWheel = PenWheel(x, y, list, -1)
-        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-        dry.invalidate()
-        return true
-    }
-
-    private fun aimPenWheel(x: Float, y: Float) {
-        val w = penWheel ?: return
-        val dx = x - w.cx
-        val dy = y - w.cy
-        // Adentro: el borrador. Afuera, el lápiz del sector hacia el que apunta la punta.
-        val inner = 40f * density
-        val index = if (w.pens.isEmpty() || hypot(dx, dy) < inner) {
-            -1
-        } else {
-            val n = w.pens.size
-            var a = atan2(dy.toDouble(), dx.toDouble()) + Math.PI / 2.0
-            if (a < 0) a += Math.PI * 2
-            ((a / (Math.PI * 2)) * n).toInt().mod(n)
-        }
-        if (index == w.index) return
-        w.index = index
-        // Fue hacia un lápiz: el círculo queda hasta que suelte. El borrador automático ya no corre.
-        if (index >= 0) removeCallbacks(eraserHold)
+        holdPickedEraser = true
+        removeCallbacks(hold)
         performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        dry.invalidate()
-    }
-
-    private fun commitPenWheel() {
-        val w = penWheel ?: return
-        val picked = w.index.takeIf { it in w.pens.indices }?.let { w.pens[it] }
-        penWheel = null
-        dry.invalidate()
-        if (picked != null) listener?.onPickRecentPen(picked) else listener?.onPickEraser()
-    }
-
-    private val wheelFill = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val wheelRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val wheelDot = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var eraserIcon: android.graphics.drawable.Drawable? = null
-
-    private fun drawPenWheel(canvas: Canvas) {
-        val w = penWheel ?: return
-        val radius = 92f * density
-        wheelFill.color = 0x66000000
-        canvas.drawCircle(w.cx, w.cy, radius, wheelFill)
-        wheelRing.color = 0xFFFFFFFF.toInt()
-        wheelRing.strokeWidth = 2f * density
-        canvas.drawCircle(w.cx, w.cy, radius, wheelRing)
-        val n = w.pens.size
-        val dot = 16f * density
-        val orbit = radius * 0.72f
-        for (i in w.pens.indices) {
-            val angle = -Math.PI / 2.0 + 2.0 * Math.PI * i / n
-            val x = w.cx + (orbit * cos(angle)).toFloat()
-            val y = w.cy + (orbit * sin(angle)).toFloat()
-            val p = w.pens[i]
-            wheelDot.color = if (p.tool == Tool.HIGHLIGHTER) {
-                val a = (p.opacity.coerceIn(5, 100) * 255 / 100).coerceIn(1, 255)
-                (p.color and 0x00FFFFFF) or (a shl 24)
-            } else {
-                Appearance.ink(p.color, p.tool, dark)
-            }
-            val rad = if (i == w.index) dot * 1.25f else dot
-            canvas.drawCircle(x, y, rad, wheelDot)
-            wheelRing.color = if (i == w.index) 0xFFFFFFFF.toInt() else 0x66000000
-            wheelRing.strokeWidth = if (i == w.index) 3f * density else 1.5f * density
-            canvas.drawCircle(x, y, rad, wheelRing)
-            // La raya de abajo es la del modo línea recta, como en la barra.
-            if (p.straight) {
-                wheelRing.color = 0xFFFFFFFF.toInt()
-                wheelRing.strokeWidth = 2.5f * density
-                val ly = y + rad + 4f * density
-                canvas.drawLine(x - rad * 0.65f, ly, x + rad * 0.65f, ly, wheelRing)
-            }
-        }
-        drawWheelEraser(canvas, w.cx, w.cy, w.index < 0)
-    }
-
-    /** El borrador, en el medio. `on` cuando la punta sigue ahí. */
-    private fun drawWheelEraser(canvas: Canvas, cx: Float, cy: Float, on: Boolean) {
-        val r = (if (on) 28f else 24f) * density
-        wheelDot.color = if (on) 0xFFFFFFFF.toInt() else 0xFFE8E8E8.toInt()
-        canvas.drawCircle(cx, cy, r, wheelDot)
-        wheelRing.color = if (on) 0xFFFFFFFF.toInt() else 0x99000000.toInt()
-        wheelRing.strokeWidth = if (on) 3f * density else 1.5f * density
-        canvas.drawCircle(cx, cy, r, wheelRing)
-        val icon = eraserIcon ?: context.getDrawable(R.drawable.ic_eraser)?.also { eraserIcon = it } ?: return
-        val s = (r * 1.05f).toInt()
-        val left = (cx - s / 2f).toInt()
-        val top = (cy - s / 2f).toInt()
-        icon.setTint(0xFF202020.toInt())
-        icon.setBounds(left, top, left + s, top + s)
-        icon.draw(canvas)
+        listener?.onPickEraser()
     }
 
     /**
@@ -991,9 +850,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val i = e.findPointerIndex(penPointer)
         if (i < 0) return
         lastPenSeen = e.eventTime
-        notePenTip(e.getX(i), e.getY(i))
         logButtons(e)
-        if (penWheel != null) return
         if (!erasing && wantsEraser(e, i)) {
             // Apretó el botón con el lápiz apoyado: lo escrito queda y sigue borrando.
             removeCallbacks(hold)
@@ -1100,18 +957,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         lastPenSeen = e.eventTime
         removeCallbacks(hold)
-        cancelWheelTimers()
+        removeCallbacks(eraserHold)
         removeCallbacks(lassoHold)
         removeCallbacks(captureHold)
         val canceled = e.flags and MotionEvent.FLAG_CANCELED != 0
-        if (penWheel != null) {
-            if (canceled) {
-                penWheel = null
-                dry.invalidate()
-            } else {
-                commitPenWheel()
-            }
-        }
         laser.lastOrNull()?.let { if (it.upAt == Long.MAX_VALUE) it.upAt = e.eventTime }
         // Un toque del lápiz sobre un audio o un video lo reproduce en vez de dejar un punto.
         val tapped = if (mode == Mode.PEN && !canceled && !penMoved && e.eventTime - penDownAt < TAP_MS && shape == null) {
@@ -1188,11 +1037,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penInPanel = false
         useMainInput()
         removeCallbacks(hold)
-        cancelWheelTimers()
+        removeCallbacks(eraserHold)
         removeCallbacks(lassoHold)
         removeCallbacks(captureHold)
         removeCallbacks(fingerHold)
-        penWheel = null
         tapPointer = NONE
         penStroke?.let {
             activeWet().cancelStroke(it, e)
@@ -1283,7 +1131,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (selection != null || captureRect != null) listener?.onSelectionChanged()
     }
 
-    // --- Lápiz quieto: círculo de lápices, o figura al final de un trazo ---
+    // --- Lápiz quieto: borrador al apoyarlo, o figura al final de un trazo ---
 
     private val hold = Runnable { onHold() }
 
@@ -1319,11 +1167,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penY = holdY
         addTrace(holdX, holdY, e.getPressure(i))
         removeCallbacks(hold)
-        wheelFromX = holdX
-        wheelFromY = holdY
-        cancelWheelTimers()
-        postDelayed(wheelHold, WHEEL_SHOW_MS)
-        postDelayed(eraserHold, WHEEL_HOLD_MS)
+        eraserFromX = holdX
+        eraserFromY = holdY
+        removeCallbacks(eraserHold)
+        postDelayed(eraserHold, ERASER_HOLD_MS)
     }
 
     private fun trackHold(e: MotionEvent, i: Int) {
@@ -1337,11 +1184,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penX = sx
         penY = sy
         if (shape == null) addTrace(sx, sy, pressure)
-        // Apenas sale del punto donde se apoyó, está escribiendo: el círculo no se abre en este trazo.
-        // Con el círculo ya abierto, mover elige un lápiz: esos relojes no se cortan acá.
-        if (penWheel == null && (penMoved || hypot(sx - wheelFromX, sy - wheelFromY) > HOLD_SLOP * density)) cancelWheelTimers()
+        // Apenas sale del punto donde se apoyó, está escribiendo: este trazo no pasa al borrador.
+        if (penMoved || hypot(sx - eraserFromX, sy - eraserFromY) > HOLD_SLOP * density) removeCallbacks(eraserHold)
         if (hypot(sx - holdX, sy - holdY) <= HOLD_SLOP * density) return
-        // Se movió: el reloj de la figura vuelve a empezar desde acá. El del círculo, no.
+        // Se movió: el reloj de la figura vuelve a empezar desde acá. El del borrador, no.
         holdX = sx
         holdY = sy
         if (!penMoved && selection != null && mode == Mode.PEN) {
@@ -1349,7 +1195,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             listener?.onSelectionChanged()
         }
         penMoved = true
-        if (penWheel == null) cancelWheelTimers()
+        removeCallbacks(eraserHold)
         removeCallbacks(hold)
         if (holdForShapes && shape == null && penStroke != null) postDelayed(hold, SHAPE_HOLD_MS)
     }
@@ -1362,7 +1208,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     private fun onHold() {
-        if (penPointer == NONE || erasing || mode != Mode.PEN || penWheel != null) return
+        if (penPointer == NONE || erasing || mode != Mode.PEN) return
         if (!penMoved) return
         if (!holdForShapes || shape != null) return
         val strokeId = penStroke ?: return
@@ -3588,7 +3434,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 canvas.drawCircle(it.x, it.y, eraserRadius * density, cursorPaint)
             }
             drawFlipShade(canvas)
-            drawPenWheel(canvas)
             if (flipAnim != null || flip?.decided == true) pending = true
             if (!pending && settledNow && penPointer == NONE && fresh.isEmpty()) {
                 prepareOverview()
@@ -3979,11 +3824,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         const val OVERVIEW_EVERY_MS = 20_000L
         const val PALM_GRACE_MS = 400L
 
-        /** La punta quieta este tiempo muestra el círculo, un poco antes de elegir el borrador. */
-        const val WHEEL_SHOW_MS = 300L
-
-        /** La punta quieta en el centro del círculo este tiempo elige el borrador, sin soltar. */
-        const val WHEEL_HOLD_MS = 500L
+        /** La punta quieta, en el mismo punto, este tiempo elige el borrador sin soltar. */
+        const val ERASER_HOLD_MS = 500L
 
         /** Tiempo por cuadro para grabar tandas de trazos que no corren prisa. */
         const val CHUNK_BUDGET_NS = 6_000_000L

@@ -614,50 +614,11 @@ class EditorActivity :
 
     override fun onEraserEmptyTap() = backToFirstPen()
 
-    override fun recentPens(): List<Pen> {
-        // La copia guardada deja afuera un lápiz si después le cambiaste la línea recta u otra
-        // opción. Acá se usa el lápiz de ahora, y entran todos los de la barra.
-        fun same(saved: Pen, current: Pen) =
-            saved == current || (
-                saved.tool == current.tool && saved.color == current.color && saved.size == current.size &&
-                    saved.dash == current.dash && saved.opacity == current.opacity &&
-                    saved.sensitivity == current.sensitivity
-                )
-        val picked = ArrayList<Pen>()
-        for (saved in prefs.recentPens) {
-            val current = pens.firstOrNull { it == saved } ?: pens.firstOrNull { same(saved, it) } ?: continue
-            if (current !in picked) picked.add(current)
-        }
-        for (p in pens) if (p !in picked) picked.add(p)
-        return picked.take(8)
-    }
-
-    override fun onPickRecentPen(pen: Pen) {
-        val i = pens.indexOf(pen)
-        if (i < 0) return
-        leaveTextTool()
-        selected = i
-        mode = Mode.PEN
-        applyTool()
-    }
-
     override fun onPickEraser() {
         leaveTextTool()
         mode = Mode.ERASER
         applyTool()
     }
-
-    /** Anota el lápiz de ahora entre los últimos usados, para el círculo de la punta. */
-    private fun rememberPen() {
-        if (mode != Mode.PEN) return
-        val pen = pens.getOrNull(selected) ?: return
-        if (pen == lastRemembered) return
-        lastRemembered = pen
-        val next = (listOf(pen) + prefs.recentPens.filter { it != pen }).take(8)
-        if (next != prefs.recentPens) prefs.recentPens = next
-    }
-
-    private var lastRemembered: Pen? = null
 
     override fun onMediaTap(media: Media) = play(media)
 
@@ -985,7 +946,6 @@ class EditorActivity :
     private fun applyTool() {
         canvas.pen = pens[selected]
         canvas.mode = mode
-        rememberPen()
         toolbar.setPens(pens, selected, mode)
         dock.setActive(when {
             textTool -> ToolDock.Tool.TEXT
