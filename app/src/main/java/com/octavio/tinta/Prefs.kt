@@ -95,6 +95,14 @@ class Prefs(context: Context) {
         get() = p.getBoolean("captureHint", false)
         set(v) = p.edit { putBoolean("captureHint", v) }
 
+    /**
+     * La imagen del portapapeles del sistema (Imágenes/Tinta, un solo archivo que se reescribe).
+     * Así otra app puede pegar la captura; el de la nota es [com.octavio.tinta.model.Clipboard].
+     */
+    var clipboardImage: String?
+        get() = p.getString("clipboardImage", null)
+        set(v) = p.edit { if (v == null) remove("clipboardImage") else putString("clipboardImage", v) }
+
     /** El borrador saca sólo la parte que toca. */
     var eraserPartial: Boolean
         get() = p.getBoolean("eraserPartial", false)

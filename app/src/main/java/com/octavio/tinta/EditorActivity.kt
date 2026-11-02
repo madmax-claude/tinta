@@ -137,6 +137,10 @@ class EditorActivity :
     private var captureArea: RectF? = null
     private val captureScreen = RectF()
 
+    /** Copia en curso: si llega otra más nueva, la que termina tarde no pisa el portapapeles. */
+    @Volatile private var captureCopy = 0
+    private val clipboardWrite = Any()
+
     /** Los renglones leídos de la nota abierta, y para qué versión de la nota (su `modified`). */
     private var searchLines: List<HandText.Line>? = null
     private var searchLinesAt = 0L
@@ -1223,6 +1227,8 @@ class EditorActivity :
     override fun onCaptureArea(world: RectF) {
         captureArea = RectF(world)
         if (canvas.captureOnScreen(captureScreen)) captureBar.showFor(captureScreen)
+        // El recorte ya es la copia: se puede pegar sin tocar el botón. La barra queda para guardar o compartir.
+        copyCapture(dismiss = false)
     }
 
     override fun onCaptureCleared() {
@@ -1232,19 +1238,74 @@ class EditorActivity :
 
     override fun onCaptureClose() = canvas.clearCapture()
 
-    override fun onCaptureCopy() = withCapture { bytes, area ->
-        // Para pegarla en una nota: como una imagen del mismo tamaño que lo capturado.
-        val file = NoteStore.keep(File(filesDir, "portapapeles").apply { mkdirs() }, bytes)
-        Clipboard.clip = Clipboard.Clip(
-            emptyList(), listOf(NoteImage(area.left, area.top, area.width(), area.height(), 0f, file)), emptyList(), emptyList(), RectF(area),
-        )
-        // Y para pegarla en otra app.
-        val uri = FileProvider.getUriForFile(this, "$packageName.files", exportFile(bytes))
-        runOnUiThread {
-            getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newUri(contentResolver, getString(R.string.capture), uri))
-            hint(getString(R.string.capture_copied), long = true)
-            canvas.clearCapture()
+    override fun onCaptureCopy() = copyCapture(dismiss = true)
+
+    /**
+     * Deja la captura en el portapapeles de la nota y en el del sistema. `dismiss` cierra el recuadro
+     * (el botón Copiar); al marcar el área no, para poder guardarla o compartirla después.
+     */
+    private fun copyCapture(dismiss: Boolean) {
+        val token = ++captureCopy
+        withCapture { bytes, area ->
+            if (token != captureCopy) return@withCapture
+            val file = NoteStore.keep(File(filesDir, "portapapeles").apply { mkdirs() }, bytes)
+            val clip = Clipboard.Clip(
+                emptyList(), listOf(NoteImage(area.left, area.top, area.width(), area.height(), 0f, file)), emptyList(), emptyList(), RectF(area),
+            )
+            val written = runCatching { writeClipboardImage(bytes, token) }
+            val uri = written.getOrNull()
+            val error = written.exceptionOrNull()?.message
+            runOnUiThread {
+                if (token != captureCopy) return@runOnUiThread
+                Clipboard.clip = clip
+                if (uri != null) {
+                    runCatching {
+                        getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
+                            ClipData.newUri(contentResolver, getString(R.string.capture), uri),
+                        )
+                    }.onFailure { e -> toast("No se pudo copiar al portapapeles del sistema: ${e.message}", long = true) }
+                } else if (error != null) {
+                    toast("No se pudo copiar al portapapeles del sistema: $error", long = true)
+                }
+                hint(getString(R.string.capture_copied), long = true)
+                if (dismiss) canvas.clearCapture()
+            }
         }
+    }
+
+    /**
+     * PNG en Imágenes/Tinta para el portapapeles del sistema. Un content URI de la galería sí lo
+     * pueden abrir otras apps; el de un archivo privado de la app llega sin permiso y pegar no muestra nada.
+     * Es siempre el mismo archivo. Null si esta copia ya quedó vieja.
+     */
+    private fun writeClipboardImage(bytes: ByteArray, token: Int): Uri? = synchronized(clipboardWrite) {
+        if (token != captureCopy) return null
+        val saved = prefs.clipboardImage?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (saved != null) {
+            val wrote = runCatching {
+                contentResolver.openOutputStream(saved)?.use { it.write(bytes) } ?: error("no se pudo escribir")
+            }.isSuccess
+            if (wrote) return if (token == captureCopy) saved else null
+            prefs.clipboardImage = null
+        }
+        if (token != captureCopy) return null
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "Tinta portapapeles.png")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Tinta")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: error("no se pudo crear la imagen")
+        try {
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("no se pudo escribir la imagen")
+            contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+        } catch (e: Exception) {
+            contentResolver.delete(uri, null, null)
+            throw e
+        }
+        prefs.clipboardImage = uri.toString()
+        if (token != captureCopy) null else uri
     }
 
     override fun onCaptureSave() = withCapture { bytes, _ ->

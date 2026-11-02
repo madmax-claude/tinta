@@ -299,6 +299,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private var eraseTapY = 0f
     private var eraseMoved = false
 
+    /** Este apoyo eligió el borrador por quedarse quieto: al soltar no cuenta como toque en vacío. */
+    private var holdPickedEraser = false
+
     /** Línea recta en curso (resaltador recto), en el mundo, con su vista previa. */
     private var lineStart: PointF? = null
     private var linePreview: InkStroke? = null
@@ -367,7 +370,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         super.onDetachedFromWindow()
         removeCallbacks(merge)
         removeCallbacks(hold)
-        removeCallbacks(wheelHold)
+        cancelWheelTimers()
         removeCallbacks(lassoHold)
         removeCallbacks(fingerHold)
         runCatching { (context as? Activity)?.window?.removeOnFrameMetricsAvailableListener(frameMetrics) }
@@ -680,6 +683,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private val wheelHold = Runnable { openPenWheelFromHold() }
 
+    /** Si al medio segundo la punta sigue en el medio del círculo, elige el borrador sin soltar. */
+    private val eraserHold = Runnable { pickEraserFromHold() }
+
+    private fun cancelWheelTimers() {
+        removeCallbacks(wheelHold)
+        removeCallbacks(eraserHold)
+    }
+
     /** Círculo alrededor de donde se apoyó la punta, con los últimos lápices. */
     private class PenWheel(val cx: Float, val cy: Float, val pens: List<Pen>, var index: Int)
 
@@ -688,6 +699,17 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (penPointer == NONE || penWheel != null || erasing || mode != Mode.PEN || penMoved) return
         if (hypot(penX - wheelFromX, penY - wheelFromY) > HOLD_SLOP * density) return
         if (openPenWheel(wheelFromX, wheelFromY)) removeCallbacks(hold)
+    }
+
+    /** El medio segundo se cumplió en el centro: borrador. El círculo se cierra y el próximo movimiento borra. */
+    private fun pickEraserFromHold() {
+        val w = penWheel ?: return
+        if (penPointer == NONE || w.index >= 0) return
+        penWheel = null
+        holdPickedEraser = true
+        dry.invalidate()
+        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        listener?.onPickEraser()
     }
 
     /** Abre el círculo en (x, y) de la pantalla. En el medio queda el borrador. */
@@ -724,6 +746,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         if (index == w.index) return
         w.index = index
+        // Fue hacia un lápiz: el círculo queda hasta que suelte. El borrador automático ya no corre.
+        if (index >= 0) removeCallbacks(eraserHold)
         performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         dry.invalidate()
     }
@@ -901,6 +925,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         removeCallbacks(fingerHold)
         tapPointer = NONE
         penPointer = id
+        holdPickedEraser = false
         lastPenSeen = e.eventTime
         logButtons(e)
         if (wantsEraser(e, i)) {
@@ -1075,7 +1100,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         lastPenSeen = e.eventTime
         removeCallbacks(hold)
-        removeCallbacks(wheelHold)
+        cancelWheelTimers()
         removeCallbacks(lassoHold)
         removeCallbacks(captureHold)
         val canceled = e.flags and MotionEvent.FLAG_CANCELED != 0
@@ -1163,7 +1188,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penInPanel = false
         useMainInput()
         removeCallbacks(hold)
-        removeCallbacks(wheelHold)
+        cancelWheelTimers()
         removeCallbacks(lassoHold)
         removeCallbacks(captureHold)
         removeCallbacks(fingerHold)
@@ -1296,8 +1321,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         removeCallbacks(hold)
         wheelFromX = holdX
         wheelFromY = holdY
-        removeCallbacks(wheelHold)
-        postDelayed(wheelHold, WHEEL_HOLD_MS)
+        cancelWheelTimers()
+        postDelayed(wheelHold, WHEEL_SHOW_MS)
+        postDelayed(eraserHold, WHEEL_HOLD_MS)
     }
 
     private fun trackHold(e: MotionEvent, i: Int) {
@@ -1312,7 +1338,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penY = sy
         if (shape == null) addTrace(sx, sy, pressure)
         // Apenas sale del punto donde se apoyó, está escribiendo: el círculo no se abre en este trazo.
-        if (penMoved || hypot(sx - wheelFromX, sy - wheelFromY) > HOLD_SLOP * density) removeCallbacks(wheelHold)
+        // Con el círculo ya abierto, mover elige un lápiz: esos relojes no se cortan acá.
+        if (penWheel == null && (penMoved || hypot(sx - wheelFromX, sy - wheelFromY) > HOLD_SLOP * density)) cancelWheelTimers()
         if (hypot(sx - holdX, sy - holdY) <= HOLD_SLOP * density) return
         // Se movió: el reloj de la figura vuelve a empezar desde acá. El del círculo, no.
         holdX = sx
@@ -1322,7 +1349,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             listener?.onSelectionChanged()
         }
         penMoved = true
-        removeCallbacks(wheelHold)
+        if (penWheel == null) cancelWheelTimers()
         removeCallbacks(hold)
         if (holdForShapes && shape == null && penStroke != null) postDelayed(hold, SHAPE_HOLD_MS)
     }
@@ -1663,7 +1690,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     private fun endErase(allowEmptyTap: Boolean = false) {
-        val backToPen = allowEmptyTap && mode == Mode.ERASER && !eraseMoved &&
+        val backToPen = allowEmptyTap && !holdPickedEraser && mode == Mode.ERASER && !eraseMoved &&
             erased.isEmpty() && cutEdits.isEmpty() && onBlankPaper(eraseX, eraseY)
         erasing = false
         if (erased.isNotEmpty()) listener?.onStrokesErased(ArrayList(erased))
@@ -3952,7 +3979,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         const val OVERVIEW_EVERY_MS = 20_000L
         const val PALM_GRACE_MS = 400L
 
-        /** La punta quieta, en el mismo punto, este tiempo abre el círculo de los últimos lápices. */
+        /** La punta quieta este tiempo muestra el círculo, un poco antes de elegir el borrador. */
+        const val WHEEL_SHOW_MS = 300L
+
+        /** La punta quieta en el centro del círculo este tiempo elige el borrador, sin soltar. */
         const val WHEEL_HOLD_MS = 500L
 
         /** Tiempo por cuadro para grabar tandas de trazos que no corren prisa. */
