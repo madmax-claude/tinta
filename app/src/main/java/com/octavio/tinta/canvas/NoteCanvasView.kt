@@ -110,10 +110,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** Cambió lo elegido con el lazo, o su lugar en la pantalla. */
         fun onSelectionChanged() = Unit
 
-        /** Un clic corto del botón lateral: vuelve a la herramienta anterior. */
+        /** Un toque del botón lateral: al borrador, o de vuelta al primer lápiz. */
         fun onStylusButtonClick() = Unit
 
-        /** Los últimos lápices, para el círculo que aparece al mantener el botón. */
+        /** Los últimos lápices, para el círculo que aparece al dejar la punta quieta. */
         fun recentPens(): List<Pen> = emptyList()
 
         /** Eligió uno de esos lápices en el círculo. */
@@ -356,6 +356,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         super.onDetachedFromWindow()
         removeCallbacks(merge)
         removeCallbacks(hold)
+        removeCallbacks(wheelHold)
         removeCallbacks(lassoHold)
         removeCallbacks(fingerHold)
         runCatching { (context as? Activity)?.window?.removeOnFrameMetricsAvailableListener(frameMetrics) }
@@ -619,13 +620,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private var lastButtons = 0
 
-    /** Cuándo se apretó el botón lateral; 0 si no está apretado. */
-    private var buttonDownAt = 0L
+    /** El último flanco del botón, para no contarlo dos veces (tecla y evento a la vez). */
+    private var lastButtonAt = Long.MIN_VALUE
 
     /**
      * Sigue los botones que informa el lápiz en sus propios eventos: los deja en el registro (para
-     * ver qué manda cada tablet). Un clic corto avisa con [Listener.onStylusButtonClick]. Mantenerlo
-     * apretado abre el círculo de los últimos lápices y, al soltar, no cambia de herramienta.
+     * ver qué manda cada tablet). El botón sólo manda el flanco, no cuánto está apretado: cada
+     * toque avisa con [Listener.onStylusButtonClick].
      */
     private fun logButtons(e: MotionEvent) {
         if (e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) return // los botones del mouse son otra cosa
@@ -635,30 +636,30 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val wasPressed = lastButtons and STYLUS_BUTTONS != 0
         lastButtons = buttons
         Diag.log("botones del lápiz: 0x${Integer.toHexString(buttons)} acción ${MotionEvent.actionToString(e.actionMasked)} herramienta ${e.getToolType(0)}")
-        buttonChanged(pressed && !wasPressed, !pressed && wasPressed, e.eventTime)
+        if ((pressed && !wasPressed) || (!pressed && wasPressed)) stylusButton(e.eventTime)
     }
 
-    private fun buttonChanged(down: Boolean, up: Boolean, time: Long) {
-        if (down) {
-            if (buttonDownAt != 0L || penWheel != null) return
-            buttonDownAt = time
-            postDelayed(wheelHold, WHEEL_HOLD_MS)
+    /** Un toque del botón lateral. El mismo clic puede llegar por dos caminos: cuenta una sola vez. */
+    private fun stylusButton(time: Long) {
+        if (time - lastButtonAt < 350L) return
+        lastButtonAt = time
+        if (penWheel != null) {
+            penWheel = null
+            dry.invalidate()
         }
-        if (up) {
-            if (buttonDownAt == 0L && penWheel == null) return
-            removeCallbacks(wheelHold)
-            if (penWheel != null) commitPenWheel()
-            else if (buttonDownAt != 0L && time - buttonDownAt < CLICK_MS) listener?.onStylusButtonClick()
-            buttonDownAt = 0L
-        }
+        listener?.onStylusButtonClick()
     }
 
     /** El botón lateral cuando llega como tecla (el lápiz o su control por Bluetooth). */
-    fun penButton(down: Boolean, time: Long) = buttonChanged(down = down, up = !down, time = time)
+    fun penButton(down: Boolean, time: Long) = stylusButton(time)
 
     private var penTipX = Float.NaN
     private var penTipY = Float.NaN
     private var penWheel: PenWheel? = null
+
+    /** Dónde se apoyó la punta, para el círculo si se queda quieta. */
+    private var wheelFromX = 0f
+    private var wheelFromY = 0f
 
     private fun notePenTip(x: Float, y: Float) {
         penTipX = x
@@ -666,21 +667,35 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (penWheel != null) aimPenWheel(x, y)
     }
 
-    private val wheelHold = Runnable { openPenWheel() }
+    private val wheelHold = Runnable { openPenWheelFromHold() }
 
-    /** Círculo alrededor de la punta, con los últimos lápices. */
+    /** Círculo alrededor de donde se apoyó la punta, con los últimos lápices. */
     private class PenWheel(val cx: Float, val cy: Float, val pens: List<Pen>, var index: Int)
 
-    private fun openPenWheel() {
-        if (buttonDownAt == 0L || penWheel != null) return
+    /** La punta sigue apoyada y cerca de donde se apoyó: abre el círculo. */
+    private fun openPenWheelFromHold() {
+        if (penPointer == NONE || penWheel != null || erasing || mode != Mode.PEN) return
+        if (hypot(penX - wheelFromX, penY - wheelFromY) > WHEEL_SLOP * density) return
+        if (openPenWheel(wheelFromX, wheelFromY)) removeCallbacks(hold)
+    }
+
+    /** Abre el círculo en (x, y) de la pantalla. False si no hay al menos dos lápices. */
+    private fun openPenWheel(x: Float, y: Float): Boolean {
+        if (penWheel != null) return true
         val list = listener?.recentPens().orEmpty().distinct().take(8)
-        if (list.size < 2) return
-        val cx = if (penTipX.isNaN()) width / 2f else penTipX
-        val cy = if (penTipY.isNaN()) height / 2f else penTipY
-        penWheel = PenWheel(cx, cy, list, -1)
-        if (!penTipX.isNaN()) aimPenWheel(penTipX, penTipY)
+        if (list.size < 2) return false
+        penStroke?.let {
+            activeWet().cancelStroke(it)
+            strokePens.remove(it)
+        }
+        penStroke = null
+        lineStart = null
+        linePreview = null
+        penMoved = true
+        penWheel = PenWheel(x, y, list, -1)
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         dry.invalidate()
+        return true
     }
 
     private fun aimPenWheel(x: Float, y: Float) {
@@ -761,9 +776,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private fun penButtonDeviceEvent(e: MotionEvent) {
         Diag.log("lápiz Bluetooth: ${MotionEvent.actionToString(e.actionMasked)} botones 0x${Integer.toHexString(e.buttonState)} de ${InputDevice.getDevice(e.deviceId)?.name}")
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS -> buttonChanged(down = true, up = false, time = e.eventTime)
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_BUTTON_RELEASE -> buttonChanged(down = false, up = true, time = e.eventTime)
-            MotionEvent.ACTION_SCROLL -> listener?.onStylusButtonClick()
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS,
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_BUTTON_RELEASE,
+            MotionEvent.ACTION_SCROLL,
+            -> stylusButton(e.eventTime)
         }
     }
 
@@ -917,6 +933,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         lastPenSeen = e.eventTime
         notePenTip(e.getX(i), e.getY(i))
         logButtons(e)
+        if (penWheel != null) return
         if (!erasing && wantsEraser(e, i)) {
             // Apretó el botón con el lápiz apoyado: lo escrito queda y sigue borrando.
             removeCallbacks(hold)
@@ -1022,9 +1039,18 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         lastPenSeen = e.eventTime
         removeCallbacks(hold)
+        removeCallbacks(wheelHold)
         removeCallbacks(lassoHold)
         removeCallbacks(captureHold)
         val canceled = e.flags and MotionEvent.FLAG_CANCELED != 0
+        if (penWheel != null) {
+            if (canceled) {
+                penWheel = null
+                dry.invalidate()
+            } else {
+                commitPenWheel()
+            }
+        }
         laser.lastOrNull()?.let { if (it.upAt == Long.MAX_VALUE) it.upAt = e.eventTime }
         // Un toque del lápiz sobre un audio o un video lo reproduce en vez de dejar un punto.
         val tapped = if (mode == Mode.PEN && !canceled && !penMoved && e.eventTime - penDownAt < TAP_MS && shape == null) {
@@ -1101,12 +1127,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penInPanel = false
         useMainInput()
         removeCallbacks(hold)
+        removeCallbacks(wheelHold)
         removeCallbacks(lassoHold)
         removeCallbacks(captureHold)
         removeCallbacks(fingerHold)
-        removeCallbacks(wheelHold)
         penWheel = null
-        buttonDownAt = 0L
         tapPointer = NONE
         penStroke?.let {
             activeWet().cancelStroke(it, e)
@@ -1197,7 +1222,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (selection != null || captureRect != null) listener?.onSelectionChanged()
     }
 
-    // --- Lápiz quieto: borrar o figura ---
+    // --- Lápiz quieto: círculo de lápices, o figura al final de un trazo ---
 
     private val hold = Runnable { onHold() }
 
@@ -1233,7 +1258,10 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penY = holdY
         addTrace(holdX, holdY, e.getPressure(i))
         removeCallbacks(hold)
-        if (holdToErase) postDelayed(hold, ERASE_HOLD_MS)
+        wheelFromX = holdX
+        wheelFromY = holdY
+        removeCallbacks(wheelHold)
+        postDelayed(wheelHold, WHEEL_HOLD_MS)
     }
 
     private fun trackHold(e: MotionEvent, i: Int) {
@@ -1247,6 +1275,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penX = sx
         penY = sy
         if (shape == null) addTrace(sx, sy, pressure)
+        if (hypot(sx - wheelFromX, sy - wheelFromY) > WHEEL_SLOP * density) removeCallbacks(wheelHold)
         if (hypot(sx - holdX, sy - holdY) <= HOLD_SLOP * density) return
         // Se movió: el reloj vuelve a empezar desde acá.
         holdX = sx
@@ -1268,21 +1297,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     private fun onHold() {
-        if (penPointer == NONE || erasing || mode != Mode.PEN) return
-        if (!penMoved) {
-            if (!holdToErase) return
-            // Quieto desde que se apoyó: lo que se empezó a escribir (un punto) no queda.
-            penStroke?.let {
-                activeWet().cancelStroke(it)
-                strokePens.remove(it)
-            }
-            penStroke = null
-            lineStart = null
-            linePreview = null
-            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-            startErase(penX, penY)
-            return
-        }
+        if (penPointer == NONE || erasing || mode != Mode.PEN || penWheel != null) return
+        if (!penMoved) return
         if (!holdForShapes || shape != null) return
         val strokeId = penStroke ?: return
         val found = Shapes.recognize(trace.toArray(), density / inScale) ?: return
@@ -3872,11 +3888,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         const val OVERVIEW_EVERY_MS = 20_000L
         const val PALM_GRACE_MS = 400L
 
-        /** Un clic del botón lateral dura menos que esto. */
-        const val CLICK_MS = 500L
+        /** La punta quieta este tiempo abre el círculo de los últimos lápices. */
+        const val WHEEL_HOLD_MS = 500L
 
-        /** Mantener el botón este tiempo abre el círculo de lápices, en vez de cambiar de herramienta. */
-        const val WHEEL_HOLD_MS = 280L
+        /** Si la punta se va más que esto (dp) de donde se apoyó, no es para el círculo. */
+        const val WHEEL_SLOP = 24f
 
         /** Tiempo por cuadro para grabar tandas de trazos que no corren prisa. */
         const val CHUNK_BUDGET_NS = 6_000_000L
@@ -3900,9 +3916,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         const val LINE_STEP = 4f
         const val SNAP_DEGREES = 4.0
         const val STYLUS_BUTTONS = MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY
-
-        /** Lápiz quieto al apoyarlo: pasa a borrar. */
-        const val ERASE_HOLD_MS = 500L
 
         /** Lápiz quieto al final de un trazo: figura. */
         const val SHAPE_HOLD_MS = 600L

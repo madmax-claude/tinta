@@ -167,7 +167,7 @@ class EditorActivity :
     private var selected = 0
     private var mode = Mode.PEN
 
-    /** A qué volver cuando un clic del botón lateral (o el láser) se apaga. */
+    /** A qué volver cuando se apaga el láser. */
     private var previousMode = Mode.PEN
 
     /** Hay trazos o datos sin guardar. */
@@ -498,10 +498,9 @@ class EditorActivity :
     }
 
     /**
-     * El botón lateral del lápiz. Un clic corto vuelve a la herramienta anterior. Mantenerlo
-     * apretado abre un círculo alrededor de la punta para elegir entre los últimos lápices. Puede
-     * llegar en los eventos del lápiz (lo ve el lienzo), como tecla del lápiz, o, en el Lenovo Tab
-     * Pen Plus, como tecla de su "control multimedia" por Bluetooth.
+     * El botón lateral del lápiz. Sólo manda el toque, no cuánto está apretado: pasa al borrador y,
+     * de nuevo, al primer lápiz. Puede llegar en los eventos del lápiz (lo ve el lienzo), como tecla
+     * del lápiz, o, en el Lenovo Tab Pen Plus, como tecla de su "control multimedia" por Bluetooth.
      */
     @SuppressLint("InlinedApi")
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -591,8 +590,17 @@ class EditorActivity :
         if (captureArea != null && canvas.captureOnScreen(captureScreen)) captureBar.showFor(captureScreen)
     }
 
-    /** Clic corto del botón lateral: vuelve a la herramienta de antes (y otro clic, a esta). */
-    override fun onStylusButtonClick() = swapTool()
+    /** El botón lateral: al borrador, y de nuevo al primer lápiz de la barra. */
+    override fun onStylusButtonClick() {
+        leaveTextTool()
+        if (mode == Mode.ERASER) {
+            selected = 0
+            mode = Mode.PEN
+        } else {
+            mode = Mode.ERASER
+        }
+        applyTool()
+    }
 
     override fun recentPens(): List<Pen> {
         val used = prefs.recentPens.filter { it in pens }
@@ -609,7 +617,7 @@ class EditorActivity :
         applyTool()
     }
 
-    /** Anota el lápiz de ahora entre los últimos usados, para el círculo del botón. */
+    /** Anota el lápiz de ahora entre los últimos usados, para el círculo de la punta. */
     private fun rememberPen() {
         if (mode != Mode.PEN) return
         val pen = pens.getOrNull(selected) ?: return
@@ -620,26 +628,6 @@ class EditorActivity :
     }
 
     private var lastRemembered: Pen? = null
-
-    /** Una herramienta de la barra: el modo y, con la pluma, cuál de los lápices. */
-    private data class ToolChoice(val mode: Mode, val pen: Int) {
-        /** Para comparar: con el borrador o el lazo no importa qué lápiz estaba elegido. */
-        val key get() = if (mode == Mode.PEN) this else copy(pen = -1)
-    }
-
-    private var currentTool: ToolChoice? = null
-    private var previousTool: ToolChoice? = null
-
-    private fun swapTool() {
-        val p = previousTool
-        if (p == null) {
-            hint(getString(R.string.no_previous_tool))
-            return
-        }
-        mode = p.mode
-        selected = p.pen.coerceIn(0, pens.lastIndex)
-        applyTool()
-    }
 
     override fun onMediaTap(media: Media) = play(media)
 
@@ -965,13 +953,6 @@ class EditorActivity :
     }
 
     private fun applyTool() {
-        val now = ToolChoice(mode, selected)
-        if (currentTool?.key != now.key) {
-            if (currentTool != null) previousTool = currentTool
-            currentTool = now
-        } else {
-            currentTool = now
-        }
         canvas.pen = pens[selected]
         canvas.mode = mode
         rememberPen()
@@ -1020,8 +1001,6 @@ class EditorActivity :
             else -> i
         }
         selected = follow(selected)
-        currentTool = currentTool?.let { if (it.mode == Mode.PEN) it.copy(pen = follow(it.pen)) else it }
-        previousTool = previousTool?.let { if (it.mode == Mode.PEN) it.copy(pen = follow(it.pen)) else it }
         prefs.pens = pens
         applyTool()
     }
@@ -1100,14 +1079,10 @@ class EditorActivity :
         leaveTextTool()
         if (mode == Mode.ERASER) {
             Popups.eraser(
-                this, button, canvas.eraserRadius, canvas.holdToErase, canvas.partialErase,
+                this, button, canvas.eraserRadius, canvas.partialErase,
                 onRadius = {
                     canvas.eraserRadius = it
                     prefs.eraserRadius = it
-                },
-                onHoldToErase = {
-                    canvas.holdToErase = it
-                    prefs.holdToErase = it
                 },
                 onPartial = {
                     canvas.partialErase = it

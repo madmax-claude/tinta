@@ -334,15 +334,13 @@ object Popups {
         popup = show(activity, anchor, box, 360f)
     }
 
-    /** Opciones del borrador: tamaño, borrar con el lápiz quieto y borrar toda la nota. */
+    /** Opciones del borrador: tamaño y borrar toda la nota. */
     fun eraser(
         activity: Activity,
         anchor: View,
         radius: Float,
-        holdToErase: Boolean,
         partial: Boolean,
         onRadius: (Float) -> Unit,
-        onHoldToErase: (Boolean) -> Unit,
         onPartial: (Boolean) -> Unit,
         onClearAll: () -> Unit,
     ) {
@@ -396,8 +394,7 @@ object Popups {
         })
         box.addView(seek)
         box.addView(dot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, c.dp(130f).toInt()))
-        box.addView(switch(c, "Mantener apretado para borrar", holdToErase, onHoldToErase))
-        box.addView(hint(c, "Con cualquier lápiz: apoyalo y dejalo quieto medio segundo; mientras no lo levantes, borra."))
+        box.addView(hint(c, "El botón del lápiz pasa al borrador; otro toque vuelve al primer lápiz de la barra. Si apoyás la punta y la dejás quieta medio segundo, aparece un círculo con los últimos lápices."), topMargin(c, 8f))
         box.addView(
             Button(c, null, 0, android.R.style.Widget_DeviceDefault_Button_Borderless_Colored).apply {
                 text = "Borrar toda la nota…"
