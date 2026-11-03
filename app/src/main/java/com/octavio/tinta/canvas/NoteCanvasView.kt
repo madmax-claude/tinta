@@ -1008,6 +1008,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penPointer = NONE
         penStroke = null
         scheduleMerge()
+        // Si el trazo pausó las baldosas, este cuadro las retoma.
+        dry.invalidate()
         // En la lupa, al terminar cerca del borde derecho del recuadro, el recuadro avanza.
         if (penInPanel && !canceled && panelMaxX > zoomBox.left + zoomBox.width() * ZOOM_ADVANCE_AT) zoomMove(ZOOM_STEP)
         penInPanel = false
@@ -3284,9 +3286,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 chunks.sync(strokes.subList(0, committedCount()))
                 stale = false
             }
+            // Con el trazo en curso no se graban baldosas ni tandas: ese trabajo le saca el cuadro a la punta.
+            val inking = penStroke != null
             val settled = fingers.isEmpty()
             view.set(camera.toWorldX(0f), camera.toWorldY(0f), camera.toWorldX(w), camera.toWorldY(h))
-            val recordScale = tiles.recordScale(camera.scale, settled)
+            val recordScale = tiles.recordScale(camera.scale, settled && !inking)
             val ahead = if (pages.paged) pages.step else 0f
             val side = pages.horizontal
             tiles.neededArea(
@@ -3296,8 +3300,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 padRight = if (side) ahead else 0f,
                 padBottom = if (side) 0f else ahead,
             )
-            val deadline = System.nanoTime() + CHUNK_BUDGET_NS
-            var pending = chunks.update(needed.left, needed.top, needed.right, needed.bottom, recordScale, settled, deadline)
+            val deadline = if (inking) 0L else System.nanoTime() + CHUNK_BUDGET_NS
+            var pending = chunks.update(needed.left, needed.top, needed.right, needed.bottom, recordScale, settled && !inking, deadline)
             for (r in chunks.urgentDamage) tiles.invalidate(r, urgent = true)
             for (r in chunks.damage) tiles.invalidate(r, urgent = false)
             for (r in damaged) tiles.invalidate(r, urgent = true)
@@ -3326,11 +3330,12 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             canvas.restoreToCount(save)
 
             pending = tiles.draw(
-                canvas, view, camera.scale, camera.tx, camera.ty, settled, this,
+                canvas, view, camera.scale, camera.tx, camera.ty, settled && !inking, this,
                 padLeft = if (side) ahead * 0.35f else 0f,
                 padTop = if (side) 0f else ahead * 0.35f,
                 padRight = if (side) ahead else 0f,
                 padBottom = if (side) 0f else ahead,
+                record = !inking,
             ) || pending
 
             // El resaltador en curso (y su vista previa) queda debajo de la pluma, que se dibuja en [InkLayer].
@@ -3396,7 +3401,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 prepareOverview()
                 pending = chunks.prewarm(recordScaleNow, System.nanoTime() + PREWARM_NS)
             }
-            if (pending) {
+            // Mientras se escribe no se pide otro cuadro para terminar baldosas: se retoma al soltar.
+            if (pending && penStroke == null) {
                 postInvalidateOnAnimation()
                 ink.postInvalidateOnAnimation()
             }

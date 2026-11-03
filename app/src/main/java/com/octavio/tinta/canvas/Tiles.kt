@@ -65,6 +65,8 @@ class Tiles(private val density: Float) {
     }
 
     private val tiles = HashMap<Long, Tile>()
+    /** Se reusa cada cuadro: armar y ordenar la lista de la vista no tiene que asignar. */
+    private val wanted = ArrayList<Tile>(64)
     private var frame = 0L
 
     /** Zona recién borrada o movida: mientras la baldosa no se regraba, ahí se esfuma en vez de vaciarse toda. */
@@ -124,6 +126,7 @@ class Tiles(private val density: Float) {
     fun clear() {
         for (t in tiles.values) t.node.discardDisplayList()
         tiles.clear()
+        wanted.clear()
         level = NONE
         previous = NONE
     }
@@ -183,7 +186,9 @@ class Tiles(private val density: Float) {
      * Graba las baldosas que faltan (hasta agotar el presupuesto del cuadro) y las dibuja.
      * `view` es el rectángulo del mundo a la vista; (scale, tx, ty), la cámara. Con `settled` en
      * false (dedos moviendo la vista) sólo se pinta lo que entra en el presupuesto, para no trabar
-     * el movimiento. Devuelve true si quedó algo por pintar.
+     * el movimiento. Con `record` en false se dibuja lo que ya está y no se graba nada: mientras
+     * el lápiz escribe, grabar baldosas le saca el cuadro al trazo. Devuelve true si quedó algo
+     * por pintar.
      */
     fun draw(
         canvas: Canvas,
@@ -197,6 +202,7 @@ class Tiles(private val density: Float) {
         padTop: Float = 0f,
         padRight: Float = 0f,
         padBottom: Float = 0f,
+        record: Boolean = true,
     ): Boolean {
         frame++
         val span = SIZE / levelScale(level)
@@ -216,7 +222,7 @@ class Tiles(private val density: Float) {
         // más filas arriba y abajo, porque las notas se recorren sobre todo hacia abajo. Las de
         // afuera se pintan sólo si sobra presupuesto, y se dibujan (fuera de la pantalla) para que
         // Android no suelte su capa.
-        val wanted = ArrayList<Tile>()
+        wanted.clear()
         for (iy in iy0 - AHEAD_ROWS - extraT..iy1 + AHEAD_ROWS + extraB) {
             for (ix in ix0 - 1 - extraL..ix1 + 1 + extraR) wanted.add(tile(level, ix, iy, span))
         }
@@ -238,6 +244,12 @@ class Tiles(private val density: Float) {
             }
             if (t.ready && !t.dirty) continue
             val inside = t.ix in ix0..ix1 && t.iy in iy0..iy1
+            // Escribiendo: la baldosa vieja sigue en pantalla y la nueva espera a que se levante el lápiz.
+            if (!record) {
+                pending = true
+                if (inside && (!t.ready || t.urgent)) missing = true
+                continue
+            }
             val cost = content.cost(t.left, t.top, t.right, t.bottom) + 1
             // Quieta, la vista pinta al menos una por cuadro aunque tenga muchos trazos; con los
             // dedos moviéndola, la mitad, para que el movimiento no se trabe. Lo urgente (un
@@ -289,6 +301,7 @@ class Tiles(private val density: Float) {
         if (tiles.values.none { it.dirty && it.urgent }) holes.clear()
         // Las que quedaron lejos se sueltan: Android libera su capa al dejar de dibujarlas.
         drop { it.frame != frame }
+        wanted.clear()
         return pending || appearing || holeFade
     }
 

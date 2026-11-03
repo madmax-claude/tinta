@@ -18,6 +18,33 @@ import androidx.ink.brush.StockBrushes
  */
 private val sensitivePens = arrayOfNulls<BrushFamily>(Sensitivity.MAX + 1)
 
+/**
+ * Ink promedia 20 ms de muestras: el trazo queda atrás de la punta y recién la alcanza cuando
+ * el lápiz frena. 4 ms sacan el temblor del digitalizador y la tinta sigue a la punta. El
+ * muestreo queda en 180 Hz, el de Ink. La predicción cubre lo que tarda el cuadro.
+ */
+@SuppressLint("RestrictedApi")
+@OptIn(ExperimentalInkCustomBrushApi::class)
+private val tightInput = BrushFamily.SlidingWindowModel(4L, 180)
+
+private var markerCached: BrushFamily? = null
+private var highlighterCached: BrushFamily? = null
+
+@SuppressLint("RestrictedApi")
+@OptIn(ExperimentalInkCustomBrushApi::class)
+private fun followPen(stock: BrushFamily): BrushFamily =
+    stock.copy(coats = stock.coats, clientBrushFamilyId = stock.clientBrushFamilyId, inputModel = tightInput)
+
+@SuppressLint("RestrictedApi")
+@OptIn(ExperimentalInkCustomBrushApi::class)
+private fun markerFamily(): BrushFamily =
+    markerCached ?: followPen(StockBrushes.marker()).also { markerCached = it }
+
+@SuppressLint("RestrictedApi")
+@OptIn(ExperimentalInkCustomBrushApi::class)
+private fun highlighterFamily(): BrushFamily =
+    highlighterCached ?: followPen(StockBrushes.highlighter(SelfOverlap.DISCARD)).also { highlighterCached = it }
+
 private fun sensitivePen(level: Int): BrushFamily {
     val k = level.coerceIn(0, Sensitivity.MAX)
     return sensitivePens[k] ?: synchronized(sensitivePens) {
@@ -63,7 +90,8 @@ private fun createSensitivePen(level: Int): BrushFamily {
                 sourceValueRangeEnd = 1f,
                 targetModifierRangeStart = low,
                 targetModifierRangeEnd = high,
-                responseTimeMillis = 20L,
+                // Corto: si no, el grosor llega después que la punta.
+                responseTimeMillis = 4L,
                 enabledToolTypes = setOf(InputToolType.STYLUS),
             ),
         )
@@ -72,7 +100,7 @@ private fun createSensitivePen(level: Int): BrushFamily {
         tip = BrushTip(behaviors = behaviors),
         // La de siempre conserva su nombre: los trazos viejos son de esa.
         clientBrushFamilyId = if (level == Sensitivity.DEFAULT) "tinta-pluma-v1" else "tinta-pluma-v1-s$level",
-        inputModel = BrushFamily.SlidingWindowModel(),
+        inputModel = tightInput,
     )
 }
 
@@ -86,9 +114,9 @@ enum class Tool(val id: Int, val label: String, val minSize: Float, val maxSize:
     fun family(sensitivity: Int = Sensitivity.DEFAULT): BrushFamily =
         when (this) {
             PEN -> sensitivePen(sensitivity)
-            MARKER -> StockBrushes.marker()
+            MARKER -> markerFamily()
             // DISCARD: un resaltador que pasa dos veces por el mismo lugar no se oscurece.
-            HIGHLIGHTER -> StockBrushes.highlighter(SelfOverlap.DISCARD)
+            HIGHLIGHTER -> highlighterFamily()
         }
 
     /** Colores que se ofrecen de entrada. */
