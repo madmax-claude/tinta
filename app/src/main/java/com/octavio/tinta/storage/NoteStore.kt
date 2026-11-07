@@ -54,6 +54,9 @@ class NoteStore private constructor(context: Context) {
 
     fun thumbnail(id: String) = File(dir, "$id.png")
 
+    /** Foto de la nota para abrirla rápido. Se puede borrar: el `.tinta` la vuelve a armar. */
+    fun vista(id: String) = File(dir, "$id.vista")
+
     fun list(): List<NoteInfo> = dir.listFiles { f -> f.name.endsWith(".tinta") }.orEmpty()
         .mapNotNull { f ->
             runCatching {
@@ -134,6 +137,8 @@ class NoteStore private constructor(context: Context) {
     fun delete(id: String) {
         file(id).delete()
         thumbnail(id).delete()
+        vista(id).delete()
+        File(dir, "$id.vista.tmp").delete()
         File(dir, "$id.media").deleteRecursively()
         File(dir, "$id.texto").delete() // lo leído de la letra, para buscar
         library.forget(id)

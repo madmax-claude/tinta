@@ -71,6 +71,14 @@ class StrokeChunks {
     private var rootDirty = true
 
     /**
+     * Sube cuando se graba o se descarta una tanda de pluma o marcador que está en la zona que se
+     * está mirando. La foto de esa capa se rehace sólo cuando [overStable] es verdad, así que
+     * llegar de a una las mallas al abrir no la rearma en cada tanda.
+     */
+    var overGen = 0
+        private set
+
+    /**
      * Zonas del mundo cuya grabación cambió desde la última vez que se leyó. Las de [urgentDamage]
      * son cambios que se tienen que ver en este cuadro (un trazo borrado o recién pasado a las
      * tandas); las de [damage], mejoras que pueden esperar (llegaron mallas, mejor antialiasing).
@@ -123,6 +131,7 @@ class StrokeChunks {
                     c.node.discardDisplayList()
                     c.recorded = false
                     c.contentDirty = false
+                    if (!c.under) overGen++
                 }
             } else if (built != c.built) {
                 c.meshDirty = true
@@ -158,6 +167,7 @@ class StrokeChunks {
         opened = false
         damage.clear()
         urgentDamage.clear()
+        overGen++
     }
 
     /** Cuántos trazos tienen las tandas que tocan el rectángulo (cuenta tandas enteras). */
@@ -185,9 +195,9 @@ class StrokeChunks {
             if (!live && !was) continue
             val blurry = settled && c.recorded && abs(ln(scale / c.recordedScale)) > REZOOM
             when {
-                c.contentDirty -> if (c.members.isEmpty()) c.contentDirty = false else record(c, scale, urgent = true)
+                c.contentDirty -> if (c.members.isEmpty()) c.contentDirty = false else record(c, scale, urgent = true, countOver = true)
                 live && (c.meshDirty || blurry || !c.recorded) ->
-                    if (System.nanoTime() < deadline) record(c, scale, urgent = false) else pending = true
+                    if (System.nanoTime() < deadline) record(c, scale, urgent = false, countOver = true) else pending = true
             }
         }
         return pending
@@ -206,9 +216,22 @@ class StrokeChunks {
         for (c in chunks) {
             if (c.recorded || c.members.isEmpty() || c.built <= 0) continue
             if (System.nanoTime() >= deadline) return true
-            record(c, scale, urgent = false)
+            record(c, scale, urgent = false, countOver = false)
         }
         return false
+    }
+
+    /**
+     * Las tandas de pluma y marcador que tocan el rectángulo ya están grabadas, con la malla de
+     * cada trazo. Mientras falte alguna, dibujarlas de a una es más barato que armar una foto.
+     */
+    fun overStable(l: Float, t: Float, r: Float, b: Float): Boolean {
+        for (c in chunks) {
+            if (c.under || !c.intersects(l, t, r, b)) continue
+            if (!c.recorded || c.contentDirty || c.meshDirty || !c.node.hasDisplayList()) return false
+            for (s in c.members) if (s.stroke == null) return false
+        }
+        return true
     }
 
     /**
@@ -275,7 +298,7 @@ class StrokeChunks {
 
     private val identity = Matrix()
 
-    private fun record(c: Chunk, scale: Float, urgent: Boolean) {
+    private fun record(c: Chunk, scale: Float, urgent: Boolean, countOver: Boolean) {
         // La posición del nodo tiene que ser su caja real: Android descarta los nodos cuya caja
         // queda fuera de lo que se está pintando. El contenido se graba relativo a esa esquina.
         val finite = c.left.isFinite() && c.bottom.isFinite()
@@ -304,6 +327,7 @@ class StrokeChunks {
         c.recordedScale = scale
         c.contentDirty = false
         c.meshDirty = false
+        if (countOver && !c.under) overGen++
     }
 
     /** Caja de los trazos que no están en las dos listas, con un margen para el antialiasing. */

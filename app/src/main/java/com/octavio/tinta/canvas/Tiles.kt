@@ -367,6 +367,12 @@ class Tiles(private val density: Float) {
      * Si en este cuadro va a faltar (o estar apareciendo) alguna baldosa de la vista, para poner
      * algo debajo antes de dibujarlas. Llamar después de [recordScale].
      */
+    /**
+     * Hay que pintar el papel en este cuadro: falta una baldosa, está apareciendo, o un borrado
+     * dejó un hueco que tiene que mostrar el papel de abajo. Llamar después de [recordScale].
+     */
+    fun needsUnderlay(view: RectF) = needsBackdrop(view) || holes.isNotEmpty()
+
     fun needsBackdrop(view: RectF): Boolean {
         if (level == NONE) return true
         val span = SIZE / levelScale(level)

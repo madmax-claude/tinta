@@ -2,6 +2,7 @@ package com.octavio.tinta.canvas
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Matrix
@@ -37,6 +38,7 @@ import com.octavio.tinta.Diag
 import com.octavio.tinta.R
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
+import com.octavio.tinta.storage.VistaCache
 import com.octavio.tinta.model.Clipboard
 import com.octavio.tinta.model.Cut
 import com.octavio.tinta.model.Dash
@@ -152,6 +154,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     val camera = Camera(resources.displayMetrics.density)
     var listener: Listener? = null
+
+    /** La foto guardada no alcanza este zoom: hay que armar las mallas. */
+    var onNeedMeshes: (() -> Unit)? = null
 
     /** La lista de la nota abierta; el borrador y el lazo la modifican directamente. */
     var strokes: MutableList<InkStroke> = mutableListOf()
@@ -428,8 +433,44 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         dry.strokesChanged()
     }
 
-    /** Llegaron mallas armadas en segundo plano. */
-    fun meshesChanged() = dry.strokesChanged()
+    /** Llegaron mallas armadas en segundo plano. No rearma la foto de la pluma: eso espera a que estén todas. */
+    fun meshesChanged() = dry.meshesArrived()
+
+    /** Anota con qué nota coincide la foto que se guarda al lado. */
+    fun armVista(file: File, modified: Long, count: Int, dark: Boolean) = dry.armVista(file, modified, count, dark)
+
+    /** Mientras se lee la foto: papel e imágenes, sin grabar trazos provisorios. */
+    fun deferMeshes() {
+        dry.vistaMode = VistaMode.WAIT
+        dry.invalidate()
+    }
+
+    /** La foto cubre este zoom: se muestra ella y las mallas esperan. */
+    fun holdVista() {
+        dry.vistaMode = VistaMode.HOLD
+        dry.invalidate()
+    }
+
+    /** Se dibuja la nota completa. */
+    fun resumeLive() {
+        if (dry.vistaMode == VistaMode.LIVE) return
+        dry.vistaMode = VistaMode.LIVE
+        dry.invalidate()
+    }
+
+    /** La foto de la nota, agrandada hasta [MAX_UPSCALE], sigue nítida a este zoom. */
+    fun vistaCovers() = dry.vistaCovers()
+
+    /** Hay foto en pantalla y este zoom ya pide las mallas. */
+    fun vistaZoomNeedsMeshes() = dry.vistaZoomNeedsMeshes()
+
+    /** Pone en la nota las franjas leídas del disco. */
+    fun adoptVista(parts: List<Pair<Bitmap, RectF>>, scale: Float, source: List<InkStroke>) = dry.adoptVista(parts, scale, source)
+
+    /** A partir de esta cantidad de trazos se guarda y se usa la foto de la nota. */
+    fun crowdedNote(count: Int) = count >= CROWDED
+
+    private enum class VistaMode { LIVE, WAIT, HOLD }
 
     /** Llegaron las imágenes decodificadas, o cambió el fondo. */
     fun elementsChanged() {
@@ -3101,7 +3142,34 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         private val tiles = Tiles(density)
         private var stale = true
         private var version = 0
-        private val overview = Overview { post { invalidate() } }
+        private val overview = Overview { post { invalidate() } }.also { ov ->
+            ov.onSnapshot = { scale, _, wasDark, modified, count, bands -> persistVista(scale, wasDark, modified, count, bands) }
+        }
+
+        /** Foto al lado de la nota. La escribe el hilo que arma la imagen, si el pedido sigue vigente. */
+        @Volatile var vistaFile: File? = null
+        @Volatile var vistaModified = Long.MIN_VALUE
+        @Volatile var vistaCount = -1
+        @Volatile var vistaDark = false
+
+        var vistaMode = VistaMode.LIVE
+
+        /** Pluma, marcador y texto en una sola textura. El resaltador sigue en las baldosas. */
+        private val inkNode = RenderNode("tinta-tinta").apply {
+            clipToBounds = true
+            setUseCompositingLayer(true, null)
+        }
+        private val inkWorld = RectF()
+        private val inkQuery = RectF()
+        private val inkMatrix = Matrix()
+        private var inkScale = 0f
+        private var inkSharp = 0f
+        private var inkKeyOver = -1
+        private var inkKeyRev = -1
+        private var inkRev = 0
+        private var inkResizeTracked: NoteText? = null
+        private var inkBakeArmed = false
+        private var inkWantFrame = false
         private var overviewAskedAt = 0L
         private var usableVersion = -1
         private var usableStamp: Any? = null
@@ -3127,7 +3195,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             val now = android.os.SystemClock.uptimeMillis()
             if (overview.hasImage && now - overviewAskedAt < OVERVIEW_EVERY_MS) return
             overviewAskedAt = now
-            overview.request(strokes.toList(), version, dark)
+            overview.request(strokes.toList(), version, dark, vistaModified, vistaCount)
         }
         private val paper = Paper()
 
@@ -3183,7 +3251,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** El contenido del panel de la lupa hay que volver a grabarlo. */
         var zoomDirty = true
 
-        fun strokesChanged() {
+        fun meshesArrived() {
             stale = true
             contentStale = true
             version++
@@ -3191,12 +3259,19 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             invalidate()
         }
 
+        fun strokesChanged() {
+            inkRev++
+            meshesArrived()
+        }
+
         fun contentChanged() {
+            inkRev++
             contentStale = true
             invalidate()
         }
 
         fun freshChanged() {
+            inkRev++
             contentStale = true
             invalidate()
         }
@@ -3216,6 +3291,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
 
         fun darkChanged() {
+            inkRev++
             zoomDirty = true
             version++
             overview.clear()
@@ -3228,8 +3304,44 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             chunks.clear()
             tiles.clear()
             overview.clear()
+            inkNode.discardDisplayList()
+            inkScale = 0f
+            inkBakeArmed = false
+            vistaMode = VistaMode.LIVE
             strokesChanged()
         }
+
+        fun armVista(file: File, modified: Long, count: Int, dark: Boolean) {
+            vistaFile = file
+            vistaModified = modified
+            vistaCount = count
+            vistaDark = dark
+        }
+
+        fun vistaCovers(): Boolean {
+            val s = overview.scale
+            return s > 0f && camera.scale <= s * MAX_UPSCALE
+        }
+
+        fun vistaZoomNeedsMeshes() = vistaMode == VistaMode.HOLD && overview.scale > 0f && !vistaCovers()
+
+        fun adoptVista(parts: List<Pair<Bitmap, RectF>>, scale: Float, source: List<InkStroke>) {
+            overview.adopt(parts, scale, source, version)
+            invalidate()
+        }
+
+        private fun persistVista(scale: Float, wasDark: Boolean, modified: Long, count: Int, bands: List<Overview.SavedBand>) {
+            val file = vistaFile ?: return
+            if (count < CROWDED || count != vistaCount || modified != vistaModified || wasDark != vistaDark) return
+            val saved = bands.map { VistaCache.Band(it.left, it.top, it.right, it.bottom, it.png) }
+            runCatching { VistaCache.write(file, modified, count, wasDark, scale, saved) }
+        }
+
+        /** Dedos, pase de hoja o la animación: se estira lo pintado y no se graba. */
+        private fun pageMoving() = fingers.isNotEmpty() || flipAnim != null || flip?.decided == true
+
+        /** Grabar baldosas o tandas le sacaría el cuadro al trazo o al gesto. Borrar sí graba. */
+        private fun bakeFrozen() = penStroke != null || (pageMoving() && !erasing)
 
         override fun onDetachedFromWindow() {
             super.onDetachedFromWindow()
@@ -3280,63 +3392,88 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (chunks.recoverLost()) zoomDirty = true
             if (!zoomNode.hasDisplayList()) zoomDirty = true
             if (contentStale) updatePageCount()
-            // Debajo de las baldosas, por si falta alguna.
-            paper.draw(canvas, paperStyle, camera.scale, camera.tx, camera.ty, w, h, dark, pages = pages, pageCount = pageCount)
             if (stale) {
                 chunks.sync(strokes.subList(0, committedCount()))
                 stale = false
             }
-            // Con el trazo en curso no se graban baldosas ni tandas: ese trabajo le saca el cuadro a la punta.
-            val inking = penStroke != null
-            val settled = fingers.isEmpty()
             view.set(camera.toWorldX(0f), camera.toWorldY(0f), camera.toWorldX(w), camera.toWorldY(h))
-            val recordScale = tiles.recordScale(camera.scale, settled && !inking)
-            val ahead = if (pages.paged) pages.step else 0f
-            val side = pages.horizontal
-            tiles.neededArea(
-                view, needed,
-                padLeft = if (side) ahead * 0.35f else 0f,
-                padTop = if (side) 0f else ahead * 0.35f,
-                padRight = if (side) ahead else 0f,
-                padBottom = if (side) 0f else ahead,
-            )
-            val deadline = if (inking) 0L else System.nanoTime() + CHUNK_BUDGET_NS
-            var pending = chunks.update(needed.left, needed.top, needed.right, needed.bottom, recordScale, settled && !inking, deadline)
-            for (r in chunks.urgentDamage) tiles.invalidate(r, urgent = true)
-            for (r in chunks.damage) tiles.invalidate(r, urgent = false)
-            for (r in damaged) tiles.invalidate(r, urgent = true)
-            chunks.urgentDamage.clear()
-            chunks.damage.clear()
-            damaged.clear()
-            // Las imágenes a la vista siguen en uso aunque sus baldosas no se vuelvan a pintar.
-            for (img in images) if (RectF.intersects(needed, Elements.imageBounds(img))) ImageCache.touch(img.file)
-            for (wd in widgets) if (wd is Media && wd.thumb != null && wd.right >= needed.left && wd.left <= needed.right &&
-                wd.bottom >= needed.top && wd.top <= needed.bottom
-            ) ImageCache.touch(wd.thumb)
-
-            camera.worldToScreen(worldToScreen)
-            var save = canvas.save()
-            canvas.concat(worldToScreen)
-            chunks.keepAlive(canvas) // antes que las baldosas
-            // Mientras faltan baldosas (o están apareciendo) se ve debajo la imagen de toda la
-            // nota, en vez del papel vacío. Se arma sólo en notas con muchos trazos a la vista,
-            // que son las que tardan más de un cuadro; aunque esté vieja (después de escribir),
-            // sirve igual hasta que llegan las baldosas.
-            if (tiles.needsBackdrop(view)) {
-                val crowded = chunks.count(view.left, view.top, view.right, view.bottom) > CROWDED
-                if (crowded && !overview.hasImage && !overview.isCurrent(version)) overview.request(strokes.toList(), version, dark)
-                if (overview.hasImage && camera.scale <= overview.scale * MAX_UPSCALE && overviewUsable()) overview.draw(canvas)
+            // La foto alcanza sólo hasta un zoom, y sólo si sigue siendo esta nota.
+            val held = vistaMode == VistaMode.HOLD && overview.hasImage
+            if (held && (!overviewUsable() || camera.scale > overview.scale * MAX_UPSCALE)) {
+                vistaMode = VistaMode.LIVE
+                onNeedMeshes?.invoke()
             }
-            canvas.restoreToCount(save)
+            camera.worldToScreen(worldToScreen)
+            if (vistaMode != VistaMode.LIVE) {
+                // Todavía no hay baldosas: el papel, las imágenes y la foto de la nota.
+                paper.draw(canvas, paperStyle, camera.scale, camera.tx, camera.ty, w, h, dark, pages = pages, pageCount = pageCount)
+                val save = canvas.save()
+                canvas.concat(worldToScreen)
+                drawLoose(canvas)
+                if (vistaMode == VistaMode.HOLD && overview.hasImage && overviewUsable()) overview.draw(canvas)
+                canvas.restoreToCount(save)
+                basePending = false
+                settledNow = !pageMoving()
+                recordScaleNow = camera.scale
+            } else {
+                // Con el trazo en curso, o mientras se mueve la hoja, no se graba: se estira lo que ya está.
+                val frozen = bakeFrozen()
+                val still = !pageMoving() && penStroke == null
+                val recordScale = tiles.recordScale(camera.scale, still)
+                val ahead = if (pages.paged) pages.step else 0f
+                val side = pages.horizontal
+                tiles.neededArea(
+                    view, needed,
+                    padLeft = if (side) ahead * 0.35f else 0f,
+                    padTop = if (side) 0f else ahead * 0.35f,
+                    padRight = if (side) ahead else 0f,
+                    padBottom = if (side) 0f else ahead,
+                )
+                val deadline = if (frozen) 0L else System.nanoTime() + CHUNK_BUDGET_NS
+                var pending = chunks.update(needed.left, needed.top, needed.right, needed.bottom, recordScale, !frozen, deadline)
+                for (r in chunks.urgentDamage) tiles.invalidate(r, urgent = true)
+                for (r in chunks.damage) tiles.invalidate(r, urgent = false)
+                for (r in damaged) tiles.invalidate(r, urgent = true)
+                chunks.urgentDamage.clear()
+                chunks.damage.clear()
+                damaged.clear()
+                // El papel ya está en las baldosas. Se pinta aparte sólo si falta una, aparece, o hay un hueco de goma.
+                if (tiles.needsUnderlay(view)) {
+                    paper.draw(canvas, paperStyle, camera.scale, camera.tx, camera.ty, w, h, dark, pages = pages, pageCount = pageCount)
+                }
+                for (img in images) if (RectF.intersects(needed, Elements.imageBounds(img))) ImageCache.touch(img.file)
+                for (wd in widgets) if (wd is Media && wd.thumb != null && wd.right >= needed.left && wd.left <= needed.right &&
+                    wd.bottom >= needed.top && wd.top <= needed.bottom
+                ) ImageCache.touch(wd.thumb)
 
-            pending = tiles.draw(
-                canvas, view, camera.scale, camera.tx, camera.ty, settled && !inking, this,
-                padLeft = if (side) ahead * 0.35f else 0f,
-                padTop = if (side) 0f else ahead * 0.35f,
-                padRight = if (side) ahead else 0f,
-                padBottom = if (side) 0f else ahead,
-                record = !inking,
-            ) || pending
+                val save = canvas.save()
+                canvas.concat(worldToScreen)
+                chunks.keepAlive(canvas) // antes que las baldosas
+                // Mientras faltan baldosas (o están apareciendo) se ve debajo la imagen de toda la
+                // nota, en vez del papel vacío. Se arma sólo en notas con muchos trazos a la vista,
+                // que son las que tardan más de un cuadro; aunque esté vieja (después de escribir),
+                // sirve igual hasta que llegan las baldosas.
+                if (tiles.needsBackdrop(view)) {
+                    val crowded = chunks.count(view.left, view.top, view.right, view.bottom) > CROWDED
+                    if (crowded && !overview.hasImage && !overview.isCurrent(version)) {
+                        overview.request(strokes.toList(), version, dark, vistaModified, vistaCount)
+                    }
+                    if (overview.hasImage && camera.scale <= overview.scale * MAX_UPSCALE && overviewUsable()) overview.draw(canvas)
+                }
+                canvas.restoreToCount(save)
+
+                pending = tiles.draw(
+                    canvas, view, camera.scale, camera.tx, camera.ty, !frozen, this,
+                    padLeft = if (side) ahead * 0.35f else 0f,
+                    padTop = if (side) 0f else ahead * 0.35f,
+                    padRight = if (side) ahead else 0f,
+                    padBottom = if (side) 0f else ahead,
+                    record = !frozen,
+                ) || pending
+                basePending = pending
+                settledNow = !pageMoving()
+                recordScaleNow = recordScale
+            }
 
             // El resaltador en curso (y su vista previa) queda debajo de la pluma, que se dibuja en [InkLayer].
             if (linePreview?.tool == Tool.HIGHLIGHTER || shapePreview?.tool == Tool.HIGHLIGHTER) {
@@ -3345,9 +3482,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 InkDraw.use { r -> drawPreviews(canvas, r, worldToScreen, under = true) }
                 canvas.restoreToCount(preview)
             }
-            basePending = pending
-            settledNow = settled
-            recordScaleNow = recordScale
         }
 
         private var basePending = false
@@ -3356,8 +3490,119 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
         /** Pluma, marcador, texto y el cromo, encima del resaltador en curso. */
         fun drawInk(canvas: Canvas) {
-            var save = canvas.save()
+            // Al empezar y al terminar de estirar un texto se rearma la foto una vez, no en cada movimiento.
+            if (resizeText !== inkResizeTracked) {
+                inkRev++
+                inkResizeTracked = resizeText
+            }
+            inkWantFrame = false
+            val save = canvas.save()
             canvas.concat(worldToScreen)
+            if (vistaMode != VistaMode.LIVE) {
+                drawVisibleTexts(canvas)
+                drawInkExtras(canvas)
+            } else {
+                val frozen = bakeFrozen()
+                val keyOk = inkNode.hasDisplayList() && inkKeyOver == chunks.overGen && inkKeyRev == inkRev
+                val scaleOk = inkScale > 0f && abs(camera.scale - inkScale) <= inkScale * INK_SCALE_SLACK
+                val covers = inkCovers()
+                inkCover(inkQuery)
+                val stable = !erasing && !frozen && view.width() > 1f &&
+                    chunks.overStable(inkQuery.left, inkQuery.top, inkQuery.right, inkQuery.bottom)
+                when {
+                    !erasing && keyOk && covers && (scaleOk || frozen) -> drawFromPicture(canvas)
+                    stable && inkBakeArmed -> {
+                        recordInkPicture()
+                        drawFromPicture(canvas)
+                        inkBakeArmed = false
+                    }
+                    stable -> {
+                        inkBakeArmed = true
+                        drawLiveInk(canvas)
+                        inkWantFrame = true
+                    }
+                    else -> {
+                        inkBakeArmed = false
+                        drawLiveInk(canvas)
+                    }
+                }
+            }
+            canvas.restoreToCount(save)
+            if (found.isNotEmpty()) drawFound(canvas, worldToScreen)
+            if (zoomOn) drawZoom(canvas, worldToScreen)
+            drawLasso(canvas)
+            drawSelection(canvas)
+            captureRect?.let { drawCapture(canvas, it, worldToScreen) }
+            textFrame?.let { drawTextFrame(canvas, it, worldToScreen) }
+            var pending = drawLaser(canvas)
+            cursor?.let {
+                cursorPaint.color = if (dark) 0x99E0E0E0.toInt() else 0x99404040.toInt()
+                canvas.drawCircle(it.x, it.y, eraserRadius * density, cursorPaint)
+            }
+            drawFlipShade(canvas)
+            if (flipAnim != null || flip?.decided == true) pending = true
+            if (vistaMode == VistaMode.LIVE && !pending && !inkWantFrame && settledNow && penPointer == NONE && fresh.isEmpty() && !bakeFrozen()) {
+                prepareOverview()
+                pending = chunks.prewarm(recordScaleNow, System.nanoTime() + PREWARM_NS)
+            }
+            // Mientras se escribe o se mueve la hoja no se pide otro cuadro para terminar baldosas.
+            val moreTiles = vistaMode == VistaMode.LIVE && !bakeFrozen() && (basePending || inkWantFrame)
+            if (pending || moreTiles) {
+                postInvalidateOnAnimation()
+                ink.postInvalidateOnAnimation()
+            }
+        }
+
+        /** Imágenes y gráficos, sin baldosas: mientras la nota se muestra con la foto guardada. */
+        private fun drawLoose(canvas: Canvas) {
+            val l = view.left - view.width()
+            val t = view.top - view.height()
+            val r = view.right + view.width()
+            val b = view.bottom + view.height()
+            for (img in images) {
+                val bounds = Elements.imageBounds(img)
+                if (bounds.right < l || bounds.left > r || bounds.bottom < t || bounds.top > b) continue
+                val bitmap = ImageCache.get(img.file) { damage(bounds) } ?: continue
+                Elements.drawImage(canvas, img, bitmap)
+                ImageCache.touch(img.file)
+            }
+            for (wd in widgets) {
+                if (wd.right < l || wd.left > r || wd.bottom < t || wd.top > b) continue
+                val area = RectF(wd.left, wd.top, wd.right, wd.bottom)
+                painter.draw(canvas, wd, dark) { f -> ImageCache.get(f) { damage(area) } }
+                if (wd is Media && wd.thumb != null) ImageCache.touch(wd.thumb)
+            }
+        }
+
+        private fun drawVisibleTexts(canvas: Canvas) {
+            for (txt in texts) {
+                val shown = shownText(txt)
+                if (!RectF.intersects(view, Elements.textBounds(shown))) continue
+                Elements.drawText(canvas, shown, textPaint, Appearance.ink(shown.color, Tool.PEN, dark))
+            }
+        }
+
+        /** Vistas previas y lo que se está moviendo: nunca entran en la foto. */
+        private fun drawInkExtras(canvas: Canvas) {
+            val over = linePreview?.tool == Tool.PEN || linePreview?.tool == Tool.MARKER ||
+                shapePreview?.tool == Tool.PEN || shapePreview?.tool == Tool.MARKER
+            if (over) InkDraw.use { r -> drawPreviews(canvas, r, worldToScreen, under = false) }
+            drawLifted(canvas)
+        }
+
+        private fun drawLifted(canvas: Canvas) {
+            lifted?.let { l ->
+                val inner = canvas.save()
+                canvas.translate(l.t.dx, l.t.dy)
+                canvas.rotate(l.t.degrees)
+                canvas.scale(l.t.a, l.t.a)
+                canvas.drawRenderNode(l.node)
+                canvas.restoreToCount(inner)
+            }
+        }
+
+        /** Cada tanda de pluma y cada texto, como venía. */
+        private fun drawLiveInk(canvas: Canvas) {
             chunks.forEachNode(view.left, view.top, view.right, view.bottom, under = false) { canvas.drawRenderNode(it) }
             chunks.drawUnrecordedOver(canvas, view.left, view.top, view.right, view.bottom)
             if (fresh.isNotEmpty() || linePreview != null || shapePreview != null) {
@@ -3369,43 +3614,80 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                     drawPreviews(canvas, r, worldToScreen, under = false)
                 }
             }
-            for (txt in texts) {
+            drawVisibleTexts(canvas)
+            drawLifted(canvas)
+        }
+
+        private fun drawFromPicture(canvas: Canvas) {
+            val layer = canvas.save()
+            canvas.translate(inkWorld.left, inkWorld.top)
+            canvas.scale(1f / inkSharp, 1f / inkSharp)
+            canvas.drawRenderNode(inkNode)
+            canvas.restoreToCount(layer)
+            resizeText?.let { txt ->
                 val shown = shownText(txt)
-                if (!RectF.intersects(view, Elements.textBounds(shown))) continue
-                Elements.drawText(canvas, shown, textPaint, Appearance.ink(shown.color, Tool.PEN, dark))
+                if (RectF.intersects(view, Elements.textBounds(shown))) {
+                    Elements.drawText(canvas, shown, textPaint, Appearance.ink(shown.color, Tool.PEN, dark))
+                }
             }
-            lifted?.let { l ->
-                val inner = canvas.save()
-                canvas.translate(l.t.dx, l.t.dy)
-                canvas.rotate(l.t.degrees)
-                canvas.scale(l.t.a, l.t.a)
-                canvas.drawRenderNode(l.node)
-                canvas.restoreToCount(inner)
+            drawInkExtras(canvas)
+        }
+
+        private fun inkCover(out: RectF) {
+            out.set(
+                view.left - view.width() * INK_PAD,
+                view.top - view.height() * INK_PAD,
+                view.right + view.width() * INK_PAD,
+                view.bottom + view.height() * INK_PAD,
+            )
+        }
+
+        private fun inkCovers(): Boolean {
+            if (!inkNode.hasDisplayList() || inkSharp <= 0f) return false
+            return view.left >= inkWorld.left - 0.5f && view.top >= inkWorld.top - 0.5f &&
+                view.right <= inkWorld.right + 0.5f && view.bottom <= inkWorld.bottom + 0.5f
+        }
+
+        /** Graba la pluma, el marcador y el texto en una textura del tamaño de la pantalla. */
+        private fun recordInkPicture() {
+            if (view.width() < 1f || view.height() < 1f) return
+            inkCover(inkWorld)
+            val wantW = ceil(inkWorld.width() * camera.scale).toInt().coerceAtLeast(1)
+            val wantH = ceil(inkWorld.height() * camera.scale).toInt().coerceAtLeast(1)
+            val longSide = max(wantW, wantH)
+            val fit = if (longSide > INK_MAX_PX) INK_MAX_PX.toFloat() / longSide else 1f
+            val pw = (wantW * fit).toInt().coerceAtLeast(1)
+            val ph = (wantH * fit).toInt().coerceAtLeast(1)
+            inkSharp = pw / inkWorld.width().coerceAtLeast(1f)
+            inkScale = camera.scale
+            inkNode.setPosition(0, 0, pw, ph)
+            val rc = inkNode.beginRecording()
+            inkMatrix.setScale(inkSharp, inkSharp)
+            inkMatrix.postTranslate(-inkWorld.left * inkSharp, -inkWorld.top * inkSharp)
+            rc.concat(inkMatrix)
+            val l = inkWorld.left
+            val t = inkWorld.top
+            val rgt = inkWorld.right
+            val b = inkWorld.bottom
+            chunks.forEachNode(l, t, rgt, b, under = false) { rc.drawRenderNode(it) }
+            if (fresh.isNotEmpty()) {
+                InkDraw.use { renderer ->
+                    for (s in fresh) {
+                        if (!s.intersects(l, t, rgt, b)) continue
+                        val mesh = s.display(dark) ?: continue
+                        renderer.draw(rc, mesh, inkMatrix)
+                    }
+                }
             }
-            canvas.restoreToCount(save)
-            if (found.isNotEmpty()) drawFound(canvas, worldToScreen)
-            if (zoomOn) drawZoom(canvas, worldToScreen)
-            drawLasso(canvas)
-            drawSelection(canvas)
-            captureRect?.let { drawCapture(canvas, it, worldToScreen) }
-            textFrame?.let { drawTextFrame(canvas, it, worldToScreen) }
-            var pending = basePending
-            if (drawLaser(canvas)) pending = true
-            cursor?.let {
-                cursorPaint.color = if (dark) 0x99E0E0E0.toInt() else 0x99404040.toInt()
-                canvas.drawCircle(it.x, it.y, eraserRadius * density, cursorPaint)
+            val skip = resizeText
+            for (txt in texts) {
+                if (txt === skip) continue
+                if (!RectF.intersects(inkWorld, Elements.textBounds(txt))) continue
+                Elements.drawText(rc, txt, textPaint, Appearance.ink(txt.color, Tool.PEN, dark))
             }
-            drawFlipShade(canvas)
-            if (flipAnim != null || flip?.decided == true) pending = true
-            if (!pending && settledNow && penPointer == NONE && fresh.isEmpty()) {
-                prepareOverview()
-                pending = chunks.prewarm(recordScaleNow, System.nanoTime() + PREWARM_NS)
-            }
-            // Mientras se escribe no se pide otro cuadro para terminar baldosas: se retoma al soltar.
-            if (pending && penStroke == null) {
-                postInvalidateOnAnimation()
-                ink.postInvalidateOnAnimation()
-            }
+            inkNode.endRecording()
+            inkKeyOver = chunks.overGen
+            inkKeyRev = inkRev
         }
 
         override fun invalidate() {
@@ -3779,6 +4061,15 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
         /** Trazos a la vista a partir de los cuales conviene la imagen de toda la nota. */
         const val CROWDED = 1500
+
+        /** La foto de la pluma cubre la vista y este margen, para poder desplazar sin rehacerla. */
+        private const val INK_PAD = 0.35f
+
+        /** Lado mayor de esa foto. Más grande no entra en la GPU de la tablet. */
+        private const val INK_MAX_PX = 4096
+
+        /** Con el zoom quieto, se rehace la foto si la escala cambió más que esto. */
+        private const val INK_SCALE_SLACK = 0.02f
 
         /** Cuánto se puede agrandar esa imagen (borrosa, pero mejor que el papel vacío). */
         const val MAX_UPSCALE = 4f

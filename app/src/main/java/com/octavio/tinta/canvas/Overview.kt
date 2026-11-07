@@ -9,6 +9,7 @@ import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import com.octavio.tinta.model.InkStroke
 import com.octavio.tinta.model.paintInk
 import com.octavio.tinta.model.Work
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.ceil
 import kotlin.math.max
@@ -23,13 +24,24 @@ class Overview(private val onReady: () -> Unit) {
 
     private class Band(val bitmap: Bitmap, val rect: RectF)
 
+    /** PNG de una franja, para guardarla al lado de la nota. La caja está en el mundo. */
+    class SavedBand(val left: Float, val top: Float, val right: Float, val bottom: Float, val png: ByteArray)
+
     /** Lo último que se armó (con los trazos de los que salió); se reemplaza entero al terminar otra versión. */
     private class Image(val bands: List<Band>, val scale: Float, val version: Int, val source: List<InkStroke>)
 
+    private class Job(val strokes: List<InkStroke>, val version: Int, val dark: Boolean, val modified: Long, val count: Int)
+
     @Volatile private var image: Image? = null
 
+    /**
+     * Al terminar una imagen, en el hilo de la vista: escala, versión, modo, `modified` y cantidad
+     * de trazos del pedido, y los PNG. Quien guarda la foto decide si ese pedido sigue vigente.
+     */
+    var onSnapshot: ((scale: Float, version: Int, dark: Boolean, modified: Long, count: Int, bands: List<SavedBand>) -> Unit)? = null
+
     /** Último pedido; si llegan varios mientras se arma una imagen, sólo se arma el más nuevo. */
-    private var wanted: Triple<List<InkStroke>, Int, Boolean>? = null
+    private var wanted: Job? = null
     private var running = false
     private val lock = Any()
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "tinta-vista").apply { priority = Thread.MIN_PRIORITY } }
@@ -43,31 +55,53 @@ class Overview(private val onReady: () -> Unit) {
 
     val hasImage get() = image != null
 
-    fun isCurrent(version: Int) = image?.version == version || synchronized(lock) { wanted?.second == version }
+    fun isCurrent(version: Int) = image?.version == version || synchronized(lock) { wanted?.version == version }
 
-    /** Arma la imagen de `strokes` (una copia) si no está ya hecha o pedida para `version`. */
-    fun request(strokes: List<InkStroke>, version: Int, dark: Boolean) {
+    /**
+     * Arma la imagen de `strokes` (una copia) si no está ya hecha o pedida para `version`.
+     * `modified` y `count` viajan con el pedido para nombrar la foto si se guarda.
+     */
+    fun request(strokes: List<InkStroke>, version: Int, dark: Boolean, modified: Long = 0L, count: Int = strokes.size) {
         if (isCurrent(version)) return
         synchronized(lock) {
-            wanted = Triple(strokes, version, dark)
+            wanted = Job(strokes, version, dark, modified, count)
             if (running) return
             running = true
         }
         worker.execute {
             while (true) {
                 val gen = generation
-                val (list, v, dark) = synchronized(lock) {
+                val job = synchronized(lock) {
                     val w = wanted
                     wanted = null
                     if (w == null) running = false
                     w
                 } ?: break
-                val built = runCatching { build(list, v, dark) }.getOrNull() ?: continue
-                if (gen != generation) continue
-                image = built
+                val built = runCatching { build(job.strokes, job.version, job.dark) }.getOrNull()
+                if (built == null) continue
+                if (gen != generation) {
+                    built.image.bands.forEach { it.bitmap.recycle() }
+                    continue
+                }
+                image = built.image
+                onSnapshot?.invoke(built.image.scale, job.version, job.dark, job.modified, job.count, built.saved)
                 onReady()
             }
         }
+    }
+
+    /**
+     * Usa franjas que ya están (la foto guardada de la nota). `source` son los trazos vivos, para
+     * que [shows] los reconozca. Lo que se estaba armando deja de valer.
+     */
+    fun adopt(parts: List<Pair<Bitmap, RectF>>, scale: Float, source: List<InkStroke>, version: Int) {
+        val bands = parts.map { Band(it.first, it.second) }
+        synchronized(lock) {
+            generation++
+            wanted = null
+            image = Image(bands, scale, version, source)
+        }
+        onReady()
     }
 
     /** Otra nota, u otro modo (oscuro): la imagen de antes no se tiene que ver más. */
@@ -104,7 +138,9 @@ class Overview(private val onReady: () -> Unit) {
     /** Cambia con cada imagen nueva (para no volver a revisar [shows] en cada cuadro). */
     val stamp: Any? get() = image
 
-    private fun build(strokes: List<InkStroke>, version: Int, dark: Boolean): Image? {
+    private class Built(val image: Image, val saved: List<SavedBand>)
+
+    private fun build(strokes: List<InkStroke>, version: Int, dark: Boolean): Built? {
         var l = Float.POSITIVE_INFINITY
         var t = Float.POSITIVE_INFINITY
         var r = Float.NEGATIVE_INFINITY
@@ -139,13 +175,17 @@ class Overview(private val onReady: () -> Unit) {
                 val mesh = s.build() ?: return@paintInk
                 renderer.draw(canvas, s.display(dark) ?: mesh, m)
             }
+            val rect = RectF(l, top, l + width / scale, bottom)
+            // El PNG sale del bitmap de software: el de la GPU no se comprime.
+            val png = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, png)
             // Copia en la GPU desde este hilo: si no, la primera vez que se dibuja se sube en
             // medio de un cuadro y lo traba un cuarto de segundo.
             val gpu = bitmap.copy(Bitmap.Config.HARDWARE, false)
             if (gpu != null) bitmap.recycle()
-            Band(gpu ?: bitmap, RectF(l, top, l + width / scale, bottom))
+            Pair(Band(gpu ?: bitmap, rect), SavedBand(rect.left, rect.top, rect.right, rect.bottom, png.toByteArray()))
         }
-        return Image(bands, scale, version, strokes)
+        return Built(Image(bands.map { it.first }, scale, version, strokes), bands.map { it.second })
     }
 
     private companion object {

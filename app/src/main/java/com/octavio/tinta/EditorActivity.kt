@@ -68,6 +68,7 @@ import com.octavio.tinta.storage.HandText
 import com.octavio.tinta.storage.ImageImport
 import com.octavio.tinta.storage.Imports
 import com.octavio.tinta.storage.NoteStore
+import com.octavio.tinta.storage.VistaCache
 import com.octavio.tinta.storage.Stickers
 import com.octavio.tinta.ui.AudioPlayerBar
 import com.octavio.tinta.ui.CaptureBar
@@ -161,6 +162,9 @@ class EditorActivity :
     private var history: History? = null
     private var meshes: MeshBuilder? = null
 
+    /** Sube cuando la foto guardada ya no se espera: el hilo que la lee la descarta. */
+    private var vistaGen = 0
+
     /** La nota que se está leyendo del disco para mostrar. */
     private var loadingId: String? = null
 
@@ -207,6 +211,7 @@ class EditorActivity :
         slot = intent.getIntExtra(EXTRA_SLOT, 0).coerceIn(0, 1)
         canvas = findViewById(R.id.canvas)
         canvas.listener = this
+        canvas.onNeedMeshes = { ensureMeshes() }
         canvas.dark = isDark
         loading = findViewById(R.id.loading)
         tabs = findViewById(R.id.tabs)
@@ -487,14 +492,37 @@ class EditorActivity :
         if (n.pages.paged && n.viewport.x == 0f && n.viewport.y == 0f && n.strokes.isEmpty() && n.images.isEmpty()) {
             canvas.post { canvas.fitToContent() }
         }
-        // Las mallas se arman de a tandas, empezando por el centro de la pantalla.
-        val metrics = resources.displayMetrics
-        val w = if (canvas.width > 0) canvas.width else metrics.widthPixels
-        val h2 = if (canvas.height > 0) canvas.height else metrics.heightPixels
-        meshes = MeshBuilder(
-            n.strokes, canvas.camera.toWorldX(w / 2f), canvas.camera.toWorldY(h2 / 2f),
-            onChunk = { canvas.post { canvas.meshesChanged() } },
-        ).also { it.start() }
+        // Una nota grande puede abrir con la foto guardada y armar las mallas recién al escribir o al acercar.
+        vistaGen++
+        val gen = vistaGen
+        canvas.armVista(store.vista(n.id), n.modified, n.strokes.size, canvas.dark)
+        if (canvas.crowdedNote(n.strokes.size) && store.vista(n.id).isFile) {
+            canvas.deferMeshes()
+            val id = n.id
+            val modified = n.modified
+            val count = n.strokes.size
+            val darkNow = canvas.dark
+            store.io.execute {
+                val loaded = runCatching { VistaCache.read(store.vista(id)) }.getOrNull()
+                    ?.takeIf { it.bands.isNotEmpty() && it.matches(modified, count, darkNow) }
+                val bitmaps = loaded?.let { decodeVista(it) }
+                runOnUiThread {
+                    if (isDestroyed || gen != vistaGen || note?.id != id) {
+                        bitmaps?.forEach { it.first.recycle() }
+                        return@runOnUiThread
+                    }
+                    if (loaded != null && bitmaps != null) {
+                        canvas.adoptVista(bitmaps, loaded.scale, n.strokes)
+                        if (canvas.vistaCovers()) canvas.holdVista() else ensureMeshes()
+                    } else {
+                        bitmaps?.forEach { it.first.recycle() }
+                        ensureMeshes()
+                    }
+                }
+            }
+        } else {
+            ensureMeshes()
+        }
         pendingSearch?.let { q ->
             pendingSearch = null
             canvas.post { openSearch(q) }
@@ -562,23 +590,57 @@ class EditorActivity :
     override fun onStrokesAdded(strokes: List<InkStroke>) {
         val n = note ?: return
         history?.add(n.strokes, strokes) ?: return
+        ensureMeshes()
         changed(redraw = false)
     }
 
     override fun onStrokesErased(removed: List<Pair<Int, InkStroke>>) {
         val n = note ?: return
         history?.recordRemoved(n.strokes, removed) ?: return
+        ensureMeshes()
         changed(redraw = false)
     }
 
     override fun onEdited(edit: History.Edit) {
         history?.record(edit) ?: return
+        ensureMeshes()
         changed(redraw = false)
     }
 
     override fun onViewportChanged() {
         viewportChanged = true
         if (note?.pages?.paged == true) pageStrip.setCurrent(canvas.currentPage())
+        if (meshes == null && canvas.vistaZoomNeedsMeshes()) ensureMeshes()
+    }
+
+    /** Arma las mallas si todavía se está mostrando sólo la foto. */
+    private fun ensureMeshes() {
+        val n = note ?: return
+        if (meshes != null) return
+        vistaGen++
+        canvas.resumeLive()
+        val metrics = resources.displayMetrics
+        val w = if (canvas.width > 0) canvas.width else metrics.widthPixels
+        val h = if (canvas.height > 0) canvas.height else metrics.heightPixels
+        meshes = MeshBuilder(
+            n.strokes, canvas.camera.toWorldX(w / 2f), canvas.camera.toWorldY(h / 2f),
+            onChunk = { canvas.post { canvas.meshesChanged() } },
+        ).also { it.start() }
+    }
+
+    /** Pasa las franjas PNG a la GPU. En el hilo de disco. */
+    private fun decodeVista(saved: VistaCache.Saved): List<Pair<Bitmap, RectF>>? {
+        val out = ArrayList<Pair<Bitmap, RectF>>(saved.bands.size)
+        for (b in saved.bands) {
+            val soft = BitmapFactory.decodeByteArray(b.png, 0, b.png.size) ?: run {
+                out.forEach { it.first.recycle() }
+                return null
+            }
+            val gpu = soft.copy(Bitmap.Config.HARDWARE, false)
+            if (gpu != null) soft.recycle()
+            out.add((gpu ?: soft) to RectF(b.left, b.top, b.right, b.bottom))
+        }
+        return out
     }
 
     override fun onSelectionChanged() {
@@ -626,6 +688,7 @@ class EditorActivity :
     private fun changed(redraw: Boolean) {
         val n = note ?: return
         n.modified = System.currentTimeMillis()
+        canvas.armVista(store.vista(n.id), n.modified, n.strokes.size, canvas.dark)
         dirty = true
         thumbnailStale = true
         if (redraw) canvas.refresh()
