@@ -88,6 +88,12 @@
     <string name="copied">Copiado: mantené apretado con el lazo donde quieras pegarlo, acá o en la otra nota</string>
     <string name="fit">Ver todo</string>
     <string name="export_pdf">Exportar PDF</string>
+    <string name="export_pick_pages">Marcá las hojas que van al PDF. Deslizá para verlas todas: Exportar y Todas quedan a la vista.</string>
+    <string name="export_pick_count">%1$d de %2$d</string>
+    <string name="export_mark_all">Marcar todas</string>
+    <string name="export_mark_none">Desmarcar</string>
+    <string name="export_this_page">esta</string>
+    <string name="page_number">Hoja %1$d</string>
     <string name="rename">Renombrar</string>
     <string name="delete">Borrar</string>
     <string name="cancel">Cancelar</string>

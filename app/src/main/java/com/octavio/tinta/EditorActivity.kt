@@ -431,6 +431,11 @@ class EditorActivity :
 
     override fun onTabClose(id: String) = closeTab(id)
 
+    override fun onTabsReordered(ids: List<String>) {
+        Tabs.reorder(prefs, slot, ids)
+        refreshTabs()
+    }
+
     override fun onTabMenu(id: String, anchor: View) {
         PopupMenu(this, anchor).apply {
             if (id == note?.id) menu.add(R.string.rename).setOnMenuItemClickListener { rename(); true }
@@ -1977,7 +1982,12 @@ class EditorActivity :
             val box = Render.bounds(n.strokes, n.images, n.texts, n.widgets)
             val used = n.pages.used(if (box == null) Float.NaN else n.pages.endOf(box.right, box.bottom))
             if (used > 1) {
-                Popups.pickPages(this, used, n.pages, canvas.currentPage()) { which ->
+                Popups.pickPages(
+                    this,
+                    used,
+                    canvas.currentPage(),
+                    PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages, n.paperColor),
+                ) { which ->
                     if (which.isEmpty()) toast("Marcá al menos una hoja") else exportNow(format, which)
                 }
                 return

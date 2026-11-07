@@ -43,6 +43,7 @@ import com.octavio.tinta.model.Note
 import com.octavio.tinta.model.NoteInfo
 import com.octavio.tinta.storage.CloudBackup
 import com.octavio.tinta.ui.Fonts
+import com.octavio.tinta.ui.PageThumbs
 import com.octavio.tinta.storage.HandText
 import com.octavio.tinta.storage.Imports
 import com.octavio.tinta.storage.JnotesBatch
@@ -1136,7 +1137,12 @@ class MainActivity : TintaActivity() {
                     val box = Render.bounds(n.strokes, n.images, n.texts, n.widgets)
                     val used = n.pages.used(if (box == null) Float.NaN else n.pages.endOf(box.right, box.bottom))
                     if (used > 1) {
-                        Popups.pickPages(this, used, n.pages, 0) { which ->
+                        Popups.pickPages(
+                            this,
+                            used,
+                            0,
+                            PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages, n.paperColor),
+                        ) { which ->
                             if (which.isEmpty()) toast("Marcá al menos una hoja") else Exporter.start(this, store, n, format, which) { it() }
                         }
                         return@runOnUiThread

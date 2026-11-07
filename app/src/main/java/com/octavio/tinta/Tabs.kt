@@ -46,6 +46,18 @@ object Tabs {
         if (lists[slot].remove(id)) prefs.setTabs(slot, lists[slot])
     }
 
+    /** El mismo conjunto de pestañas, en otro orden. False si no son las que están abiertas. */
+    fun reorder(prefs: Prefs, slot: Int, ids: List<String>): Boolean {
+        load(prefs)
+        val cur = lists[slot]
+        if (ids == cur) return false
+        if (ids.size != cur.size || ids.toSet() != cur.toSet()) return false
+        cur.clear()
+        cur.addAll(ids)
+        prefs.setTabs(slot, cur)
+        return true
+    }
+
     /** Pasa todas las pestañas de `from` al final de las de `to` (se cerró la ventana `from`). */
     fun moveAll(prefs: Prefs, from: Int, to: Int) {
         load(prefs)

@@ -3,9 +3,11 @@ package com.octavio.tinta.ui
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -25,6 +27,7 @@ import com.octavio.tinta.DotView
 import com.octavio.tinta.R
 import com.octavio.tinta.canvas.Paper
 import com.octavio.tinta.dp
+import com.octavio.tinta.export.Render
 import com.octavio.tinta.tip
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
@@ -35,6 +38,10 @@ import com.octavio.tinta.model.PageSize
 import com.octavio.tinta.model.Pen
 import com.octavio.tinta.model.Sensitivity
 import com.octavio.tinta.model.Tool
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /** Ventanitas de opciones que se abren junto a la barra flotante y a la barra de arriba. */
@@ -696,36 +703,159 @@ object Popups {
 
     /**
      * Qué hojas van a un PDF. La `current` empieza marcada. "Todas" exporta el rango entero.
-     * `onPick` recibe los índices, de la primera a la última usada.
+     * Las miniaturas se arman en segundo plano. `onPick` recibe los índices marcados.
      */
-    fun pickPages(activity: Activity, count: Int, pages: com.octavio.tinta.model.PageLayout, current: Int, onPick: (List<Int>) -> Unit) {
+    fun pickPages(activity: Activity, count: Int, current: Int, shot: PageThumbs.Snapshot, onPick: (List<Int>) -> Unit) {
         val c: Context = activity
-        val box = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        val here = current.coerceIn(0, (count - 1).coerceAtLeast(0))
+        val screenW = c.resources.displayMetrics.widthPixels
+        val screenH = activity.window.decorView.height.takeIf { it > 0 } ?: c.resources.displayMetrics.heightPixels
+        val outer = min(c.dp(960f).toInt(), screenW - c.dp(16f).toInt())
+        val inner = (outer - c.dp(56f).toInt()).coerceAtLeast(c.dp(280f).toInt())
+        val columns = (inner / c.dp(168f).toInt()).coerceIn(2, 5)
+        val cellW = inner / columns
+        val aspect = if (shot.pages.width > 0f) shot.pages.height / shot.pages.width else 1.414f
+        val imageW = (cellW - c.dp(16f)).toInt().coerceAtLeast(1)
+        val imageH = (imageW * aspect).roundToInt().coerceAtLeast(1)
+        val root = LinearLayout(c).apply {
+            orientation = LinearLayout.VERTICAL
+            minimumWidth = inner
+            val pad = c.dp(12f).toInt()
+            setPadding(pad, c.dp(4f).toInt(), pad, 0)
+        }
+        root.addView(TextView(c).apply {
+            text = c.getString(R.string.export_pick_pages)
+            textSize = 14f
+            setTextColor(c.getColor(R.color.ink))
+        })
+        val countLabel = TextView(c).apply {
+            textSize = 13f
+            setTextColor(c.getColor(R.color.muted))
+            setPadding(0, c.dp(2f).toInt(), 0, c.dp(4f).toInt())
+        }
+        val markAll = TextView(c).apply {
+            textSize = 15f
+            setTextColor(c.getColor(R.color.accent))
+            setPadding(0, c.dp(4f).toInt(), c.dp(8f).toInt(), c.dp(4f).toInt())
+        }
+        val head = LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(countLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(markAll)
+        }
+        root.addView(head)
         val checks = ArrayList<CheckBox>(count)
+        val images = arrayOfNulls<ImageView>(count)
+        val grid = GridLayout(c).apply { columnCount = columns }
+        fun frame(on: Boolean) = GradientDrawable().apply {
+            cornerRadius = c.dp(6f)
+            setColor(0x00000000)
+            setStroke(c.dp(if (on) 2.5f else 1f).toInt(), c.getColor(if (on) R.color.accent else R.color.card_stroke))
+        }
+        fun updateCount() {
+            val marked = checks.count { it.isChecked }
+            countLabel.text = c.getString(R.string.export_pick_count, marked, count)
+            markAll.text = c.getString(if (marked == count && count > 0) R.string.export_mark_none else R.string.export_mark_all)
+        }
         for (k in 0 until count) {
-            val name = pages.nameOf(k)
+            val name = shot.pages.nameOf(k)
+            val title = buildString {
+                append(c.getString(R.string.page_number, k + 1))
+                if (name.isNotEmpty()) append(" · ").append(name)
+                if (k == here) append(" · ").append(c.getString(R.string.export_this_page))
+            }
             val check = CheckBox(c).apply {
-                text = if (name.isEmpty()) "Hoja ${k + 1}" else "Hoja ${k + 1} · $name"
-                isChecked = k == current.coerceIn(0, count - 1)
+                isChecked = k == here
+                isClickable = false
+                isFocusable = false
+            }
+            val image = ImageView(c).apply {
+                scaleType = ImageView.ScaleType.FIT_XY
+                setBackgroundColor(shot.paperColor ?: 0xFFF7F1E6.toInt())
+                foreground = frame(check.isChecked)
+                contentDescription = title
+            }
+            check.setOnCheckedChangeListener { _, on ->
+                image.foreground = frame(on)
+                image.contentDescription = if (on) "$title, marcada" else title
+                updateCount()
+            }
+            val line = LinearLayout(c).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(check, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                addView(TextView(c).apply {
+                    text = title
+                    textSize = 12f
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setTextColor(c.getColor(R.color.ink))
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+            val cell = LinearLayout(c).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(c.dp(4f).toInt(), c.dp(4f).toInt(), c.dp(4f).toInt(), c.dp(6f).toInt())
+                addView(image, LinearLayout.LayoutParams(imageW, imageH))
+                addView(line)
+                setOnClickListener { check.isChecked = !check.isChecked }
             }
             checks.add(check)
-            box.addView(check)
+            images[k] = image
+            grid.addView(cell, GridLayout.LayoutParams().apply { width = cellW })
         }
-        val scroll = ScrollView(c).apply {
-            addView(box)
-            val pad = c.dp(8f).toInt()
-            setPadding(pad, 0, pad, 0)
+        updateCount()
+        markAll.setOnClickListener {
+            val on = checks.any { !it.isChecked }
+            for (check in checks) check.isChecked = on
         }
-        android.app.AlertDialog.Builder(activity)
+        val scroll = MaxHeightScroll(c, (screenH * 0.55f).toInt().coerceAtLeast(c.dp(160f).toInt())).apply {
+            isFillViewport = false
+            addView(grid)
+        }
+        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val alive = AtomicBoolean(true)
+        val thumbs = Executors.newSingleThreadExecutor { Thread(it, "tinta-pdf-hojas") }
+        val order = ArrayList<Int>(count)
+        if (count > 0) order.add(here)
+        for (k in 0 until count) if (k != here) order.add(k)
+        for (k in order) {
+            thumbs.execute {
+                if (!alive.get()) return@execute
+                val bitmap = runCatching {
+                    Render.page(shot.strokes, shot.images, shot.texts, shot.widgets, shot.background, shot.pages, k, 220, shot.paperColor)
+                }.getOrNull() ?: return@execute
+                activity.runOnUiThread {
+                    if (!alive.get() || activity.isDestroyed) {
+                        bitmap.recycle()
+                        return@runOnUiThread
+                    }
+                    images[k]?.setImageBitmap(bitmap)
+                }
+            }
+        }
+        val dialog = android.app.AlertDialog.Builder(activity)
             .setTitle("Exportar PDF")
-            .setMessage("Marcá las hojas que van al PDF.")
-            .setView(scroll)
+            .setView(root)
             .setPositiveButton("Exportar") { _, _ ->
-                onPick(checks.mapIndexedNotNull { i, b -> if (b.isChecked) i else null })
+                onPick(checks.mapIndexedNotNull { i, box -> if (box.isChecked) i else null })
             }
             .setNeutralButton("Todas") { _, _ -> onPick((0 until count).toList()) }
             .setNegativeButton(R.string.cancel, null)
-            .show()
+            .setOnDismissListener {
+                alive.set(false)
+                thumbs.shutdownNow()
+            }
+            .create()
+        dialog.show()
+        dialog.window?.setLayout(outer, ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+
+    /** Un desplazamiento con tope: el cuadro no crece más que la pantalla y los botones siguen a la vista. */
+    private class MaxHeightScroll(context: Context, private val maxPx: Int) : ScrollView(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(maxPx, View.MeasureSpec.AT_MOST))
+        }
     }
 
     /**
