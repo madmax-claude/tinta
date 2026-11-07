@@ -5,6 +5,9 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.graphics.drawable.BitmapDrawable
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -21,14 +24,17 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.IntentCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.octavio.tinta.canvas.Elements
 import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.jnotes.JnotesImporter
@@ -46,6 +52,7 @@ import com.octavio.tinta.ui.Chrome
 import com.octavio.tinta.ui.FolderDrag
 import com.octavio.tinta.ui.Popups
 import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.Executors
 
 class MainActivity : TintaActivity() {
@@ -87,6 +94,22 @@ class MainActivity : TintaActivity() {
 
     private val pickFiles = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) importAll(uris)
+    }
+
+    /** Para refrescar «Quitar» en Configuración cuando termina de copiarse la imagen. */
+    private var refreshMenuRow: (() -> Unit)? = null
+    private var refreshListRow: (() -> Unit)? = null
+
+    private val pickMenuImage = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) saveWallpaper(uri, prefs.menuWallpaperFile(), { prefs.menuImage = System.currentTimeMillis() }) {
+            refreshMenuRow?.invoke()
+        }
+    }
+
+    private val pickListImage = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) saveWallpaper(uri, prefs.listWallpaperFile(), { prefs.listImage = System.currentTimeMillis() }) {
+            refreshListRow?.invoke()
+        }
     }
 
     private lateinit var cloud: CloudBackup
@@ -284,8 +307,9 @@ class MainActivity : TintaActivity() {
 
     private fun applyColors() {
         prefs.menuColor?.let { c ->
-            val bar = findViewById<View>(R.id.sidebar)
-            Chrome.paint(bar, c)
+            // El color queda detrás de la imagen. Los textos se ajustan en el contenido, no en la foto.
+            findViewById<View>(R.id.sidebar).setBackgroundColor(c)
+            Chrome.contrast(findViewById(R.id.sidebar_body), c)
             menuColor = c
         }
         prefs.listColor?.let { c ->
@@ -303,7 +327,95 @@ class MainActivity : TintaActivity() {
                 for (id in listOf(R.id.import_jnotes, R.id.new_note)) Chrome.contrast(findViewById(id), c)
             }
         }
+        applyWallpapers()
         Fonts.apply(window.decorView, prefs.font)
+    }
+
+    /** La foto de la barra de carpetas y la del fondo de la lista, cada una con su opacidad. */
+    private fun applyWallpapers() {
+        showWallpaper(R.id.sidebar_image, prefs.menuWallpaper(), prefs.menuImageAlpha)
+        showWallpaper(R.id.list_image, prefs.listWallpaper(), prefs.listImageAlpha)
+    }
+
+    private fun showWallpaper(id: Int, file: File?, alphaPercent: Int) {
+        val view = findViewById<ImageView>(id)
+        val previous = (view.drawable as? BitmapDrawable)?.bitmap
+        val bitmap = file?.let { Elements.decode(it, WALL_MAX, hardware = true) }
+        if (bitmap == null) {
+            view.setImageDrawable(null)
+            view.visibility = View.GONE
+        } else {
+            view.setImageBitmap(bitmap)
+            view.imageTintList = null
+            view.imageAlpha = alphaPercent.coerceIn(0, 100) * 255 / 100
+            view.visibility = View.VISIBLE
+        }
+        if (previous != null && previous !== bitmap && !previous.isRecycled) previous.recycle()
+    }
+
+    /** Copia la imagen elegida, la endereza y la achica. El sello se guarda sólo si salió bien. */
+    private fun saveWallpaper(uri: Uri, dest: File, onSaved: () -> Unit, onReady: () -> Unit) {
+        store.io.execute {
+            val ok = runCatching { writeWallpaper(uri, dest) }.isSuccess
+            if (ok) onSaved()
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (!ok) toast(getString(R.string.image_unreadable)) else {
+                    applyWallpapers()
+                    onReady()
+                }
+            }
+        }
+    }
+
+    private fun writeWallpaper(uri: Uri, dest: File) {
+        val folder = dest.parentFile ?: error("sin carpeta")
+        val src = File(folder, dest.name + ".src")
+        val tmp = File(folder, dest.name + ".tmp")
+        try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                src.outputStream().use { input.copyTo(it) }
+            } ?: error("no se pudo leer")
+            val decoded = Elements.decode(src, WALL_MAX, hardware = false) ?: error("no es una imagen")
+            val bitmap = upright(src, decoded)
+            try {
+                val written = FileOutputStream(tmp).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 86, it) }
+                if (!written || tmp.length() == 0L) error("no se pudo guardar")
+                if (!tmp.renameTo(dest)) tmp.copyTo(dest, overwrite = true)
+            } finally {
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
+        } finally {
+            src.delete()
+            tmp.delete()
+        }
+    }
+
+    /** Las fotos del teléfono suelen venir acostadas: se guardan ya derechas. */
+    private fun upright(source: File, bitmap: Bitmap): Bitmap {
+        val orientation = runCatching {
+            ExifInterface(source.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
+            else -> return bitmap
+        }
+        val turned = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (turned !== bitmap) bitmap.recycle()
+        return turned
     }
 
     // --- Configuración ---
@@ -385,14 +497,127 @@ class MainActivity : TintaActivity() {
         colorRow(getString(R.string.color_top_bar), getColor(R.color.chrome), prefs.topBarColor) { prefs.topBarColor = it }
         colorRow(getString(R.string.color_tools), getColor(R.color.toolbar), prefs.toolsColor) { prefs.toolsColor = it }
         colorRow(getString(R.string.color_tab), getColor(R.color.paper), prefs.tabColor) { prefs.tabColor = it }
+        fun imageRow(
+            title: String,
+            hint: String,
+            target: ImageView,
+            hasImage: () -> Boolean,
+            alpha: () -> Int,
+            onAlpha: (Int) -> Unit,
+            onPick: () -> Unit,
+            onClear: () -> Unit,
+            hold: ((() -> Unit) -> Unit),
+        ) {
+            box.addView(TextView(this).apply {
+                text = title
+                textSize = 13f
+                setTextColor(getColor(R.color.muted))
+                setPadding(0, dp(10f).toInt(), 0, dp(2f).toInt())
+            })
+            box.addView(TextView(this).apply {
+                text = hint
+                textSize = 13f
+                setTextColor(getColor(R.color.muted))
+                setPadding(0, 0, 0, dp(4f).toInt())
+            })
+            val clear = TextView(this).apply {
+                text = getString(R.string.remove_image)
+                textSize = 15f
+                setTextColor(getColor(R.color.accent))
+                background = getDrawable(R.drawable.bg_tool)
+                val pad = dp(12f).toInt()
+                setPadding(pad, dp(8f).toInt(), pad, dp(8f).toInt())
+                minHeight = dp(44f).toInt()
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val pick = TextView(this).apply {
+                text = getString(R.string.pick_image)
+                textSize = 15f
+                setTextColor(getColor(R.color.accent))
+                background = getDrawable(R.drawable.bg_tool)
+                val pad = dp(12f).toInt()
+                setPadding(pad, dp(8f).toInt(), pad, dp(8f).toInt())
+                minHeight = dp(44f).toInt()
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setOnClickListener { onPick() }
+            }
+            val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            buttons.addView(pick)
+            buttons.addView(clear, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(8f).toInt()
+            })
+            box.addView(buttons)
+            val label = TextView(this).apply {
+                textSize = 13f
+                setTextColor(getColor(R.color.muted))
+                setPadding(0, dp(6f).toInt(), 0, 0)
+            }
+            box.addView(label)
+            val seek = SeekBar(this).apply { max = 100 }
+            box.addView(seek)
+            fun refresh() {
+                clear.visibility = if (hasImage()) View.VISIBLE else View.GONE
+                val a = alpha().coerceIn(0, 100)
+                label.text = getString(R.string.image_opacity, a)
+                if (seek.progress != a) seek.progress = a
+            }
+            clear.setOnClickListener {
+                onClear()
+                refresh()
+            }
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar, progress: Int, fromUser: Boolean) {
+                    label.text = getString(R.string.image_opacity, progress)
+                    if (!fromUser) return
+                    onAlpha(progress)
+                    target.imageAlpha = progress.coerceIn(0, 100) * 255 / 100
+                }
+                override fun onStartTrackingTouch(s: SeekBar) = Unit
+                override fun onStopTrackingTouch(s: SeekBar) = Unit
+            })
+            refresh()
+            hold(::refresh)
+        }
         colorRow(getString(R.string.color_menu), getColor(R.color.sidebar), prefs.menuColor) { prefs.menuColor = it }
+        imageRow(
+            getString(R.string.menu_image),
+            getString(R.string.menu_image_hint),
+            findViewById(R.id.sidebar_image),
+            { prefs.menuWallpaper() != null },
+            { prefs.menuImageAlpha },
+            { prefs.menuImageAlpha = it },
+            { pickMenuImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            {
+                prefs.menuImage = 0L
+                prefs.menuWallpaperFile().delete()
+                applyWallpapers()
+            },
+        ) { refreshMenuRow = it }
         colorRow(getString(R.string.color_list), getColor(R.color.chrome), prefs.listColor) { prefs.listColor = it }
+        imageRow(
+            getString(R.string.list_image),
+            getString(R.string.list_image_hint),
+            findViewById(R.id.list_image),
+            { prefs.listWallpaper() != null },
+            { prefs.listImageAlpha },
+            { prefs.listImageAlpha = it },
+            { pickListImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            {
+                prefs.listImage = 0L
+                prefs.listWallpaperFile().delete()
+                applyWallpapers()
+            },
+        ) { refreshListRow = it }
         // Al cerrar, si cambió, la pantalla se vuelve a armar (sin o con las etiquetas de los botones).
         AlertDialog.Builder(this)
             .setTitle(R.string.settings)
             .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setPositiveButton(R.string.ok, null)
-            .setOnDismissListener { if (prefs.look != lookShown) recreate() }
+            .setOnDismissListener {
+                refreshMenuRow = null
+                refreshListRow = null
+                if (prefs.look != lookShown) recreate()
+            }
             .show()
     }
 
@@ -1117,5 +1342,8 @@ class MainActivity : TintaActivity() {
         const val NO_FOLDER = "-"
         const val SEARCH_DELAY_MS = 300L
         const val REFILTER_MS = 400L
+
+        /** Lado más largo de la foto guardada: alcanza para la lista en la Tab P12 sin una foto enorme. */
+        const val WALL_MAX = 2048
     }
 }

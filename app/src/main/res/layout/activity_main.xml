@@ -6,15 +6,30 @@
     android:background="@color/chrome"
     android:orientation="horizontal">
 
-    <!-- Barra lateral: carpetas, copia en Google Drive y modo oscuro. -->
-    <LinearLayout
+    <!-- Barra lateral: carpetas, copia en Google Drive y modo oscuro. La imagen queda detrás. -->
+    <FrameLayout
         android:id="@+id/sidebar"
         android:layout_width="240dp"
         android:layout_height="match_parent"
-        android:background="@color/sidebar"
-        android:orientation="vertical"
-        android:paddingHorizontal="10dp"
-        android:paddingVertical="12dp">
+        android:background="@color/sidebar">
+
+        <ImageView
+            android:id="@+id/sidebar_image"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="false"
+            android:focusable="false"
+            android:importantForAccessibility="no"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/sidebar_body"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="12dp">
 
         <TextView
             android:layout_width="match_parent"
@@ -71,19 +86,34 @@
             style="@style/SidebarItem"
             android:drawableStart="@drawable/ic_settings"
             android:text="@string/settings" />
-    </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
 
     <View
         android:layout_width="1dp"
         android:layout_height="match_parent"
         android:background="@color/divider" />
 
-    <LinearLayout
-        android:id="@+id/content"
+    <FrameLayout
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_weight="1"
-        android:orientation="vertical">
+        android:layout_weight="1">
+
+        <ImageView
+            android:id="@+id/list_image"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="false"
+            android:focusable="false"
+            android:importantForAccessibility="no"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/content"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -169,5 +199,6 @@
                 android:textColor="@color/muted"
                 android:textSize="16sp" />
         </FrameLayout>
-    </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
 </LinearLayout>

@@ -9,10 +9,12 @@ import com.octavio.tinta.model.Background
 import com.octavio.tinta.model.LassoFilter
 import com.octavio.tinta.model.PageSize
 import com.octavio.tinta.model.Pen
+import java.io.File
 
 /** Preferencias de la app: modo oscuro, lápices de la barra, colores guardados, lazo, hojas nuevas. */
 class Prefs(context: Context) {
     private val p = context.getSharedPreferences("tinta", Context.MODE_PRIVATE)
+    private val dir by lazy { context.filesDir }
 
     var dark: Boolean
         get() = p.getBoolean("dark", false)
@@ -65,13 +67,40 @@ class Prefs(context: Context) {
         get() = p.getInt("listColor", 0).takeIf { it != 0 }
         set(v) = p.edit { putInt("listColor", v ?: 0) }
 
+    /**
+     * Imagen de la barra de carpetas y del fondo de la lista. El número es 0 si no hay imagen;
+     * cambia al elegir otra, para que la pantalla se vuelva a armar. La opacidad va de 0 a 100.
+     */
+    var menuImage: Long
+        get() = p.getLong("menuImage", 0L)
+        set(v) = p.edit { putLong("menuImage", v) }
+    var menuImageAlpha: Int
+        get() = p.getInt("menuImageAlpha", DEFAULT_IMAGE_ALPHA).coerceIn(0, 100)
+        set(v) = p.edit { putInt("menuImageAlpha", v.coerceIn(0, 100)) }
+    var listImage: Long
+        get() = p.getLong("listImage", 0L)
+        set(v) = p.edit { putLong("listImage", v) }
+    var listImageAlpha: Int
+        get() = p.getInt("listImageAlpha", DEFAULT_IMAGE_ALPHA).coerceIn(0, 100)
+        set(v) = p.edit { putInt("listImageAlpha", v.coerceIn(0, 100)) }
+
+    fun menuWallpaper(): File? = wallpaper(MENU_WALL, menuImage)
+    fun listWallpaper(): File? = wallpaper(LIST_WALL, listImage)
+    fun menuWallpaperFile(): File = File(dir, MENU_WALL)
+    fun listWallpaperFile(): File = File(dir, LIST_WALL)
+
+    private fun wallpaper(name: String, stamp: Long): File? =
+        File(dir, name).takeIf { stamp != 0L && it.isFile }
+
     /** Letra de las herramientas, las hojas y el menú. Ver [com.octavio.tinta.ui.Fonts]. */
     var font: String
         get() = p.getString("font", "sans") ?: "sans"
         set(v) = p.edit { putString("font", v) }
 
     /** Todo lo de Configuración que cambia cómo se arma la pantalla (si cambia, se vuelve a armar). */
-    val look: String get() = "$helpMessages/$topBarColor/$toolsColor/$tabColor/$menuColor/$listColor/$font"
+    val look: String
+        get() = "$helpMessages/$topBarColor/$toolsColor/$tabColor/$menuColor/$listColor/" +
+            "$menuImage/$menuImageAlpha/$listImage/$listImageAlpha/$font"
 
     /** Mostrar los mensajes de ayuda ([Help]). */
     var helpMessages: Boolean
@@ -216,6 +245,12 @@ class Prefs(context: Context) {
     var folder: String?
         get() = p.getString("folder", null)
         set(v) = p.edit { putString("folder", v) }
+
+    private companion object {
+        const val MENU_WALL = "menu-sidebar.jpg"
+        const val LIST_WALL = "menu-list.jpg"
+        const val DEFAULT_IMAGE_ALPHA = 40
+    }
 }
 
 /**

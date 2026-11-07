@@ -47,6 +47,14 @@
     <string name="color_tab">Pestaña elegida</string>
     <string name="color_menu">Menú principal: barra de carpetas</string>
     <string name="color_list">Menú principal: fondo de la lista de notas</string>
+    <string name="menu_image">Imagen de la barra de carpetas</string>
+    <string name="menu_image_hint">Detrás de las carpetas. Bajá la opacidad si no se leen los nombres.</string>
+    <string name="list_image">Imagen del fondo de la lista</string>
+    <string name="list_image_hint">Detrás de las notas. Bajá la opacidad si no se lee el título.</string>
+    <string name="pick_image">Elegir imagen</string>
+    <string name="remove_image">Quitar</string>
+    <string name="image_opacity">Opacidad: %1$d%%</string>
+    <string name="image_unreadable">No se pudo usar esa imagen</string>
     <string name="color_original">El de siempre</string>
     <string name="help_messages_hint">Las etiquetas que aparecen al pasar el lápiz sobre un botón o al mantenerlo apretado, y los avisos que explican cómo usar algo o confirman que salió bien. Los errores se muestran siempre.</string>
     <string name="capture">Captura de Tinta</string>
