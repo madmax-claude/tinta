@@ -309,10 +309,12 @@ class StrokeChunks {
         rc.translate(-left.toFloat(), -top.toFloat())
         // La matriz sólo le dice a Ink la escala en pantalla, para el antialiasing.
         identity.setScale(scale, scale)
-        InkDraw.use { r ->
+        // De a un trazo. El candado de toda la tanda (hasta 64, ~3 ms) dejaba al calentador
+        // en la cola, y al soltarlo se adelantaba a la tinta fresca.
+        InkDraw.onScreen {
             for (s in c.members) {
                 val mesh = s.display(dark)
-                if (mesh != null) r.draw(rc, mesh, identity) else drawRough(rc, s)
+                if (mesh != null) InkDraw.draw(rc, mesh, identity) else drawRough(rc, s)
             }
         }
         c.node.endRecording()
