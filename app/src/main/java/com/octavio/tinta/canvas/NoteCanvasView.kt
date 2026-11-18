@@ -1795,8 +1795,15 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** Copias que se arman en segundo plano; al terminar se agregan con [apply]. */
     private class Pending(val task: FutureTask<Added>, val apply: (Added) -> Unit)
 
+    /**
+     * Cierre de lazo que todavía está contando puntos. Cada cambio de selección lo deja viejo, así
+     * un resultado que llega tarde no pisa lo que el usuario eligió después.
+     */
+    private var lassoPick = 0
+
     private var selection: Selection? = null
         set(value) {
+            lassoPick++
             field = value?.takeUnless { it.isEmpty }
             dry.invalidate()
             listener?.onSelectionChanged()
@@ -1894,7 +1901,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             resizeText = null
         }
         finishPending()
-        if (selection != null) selection = null
+        if (selection != null) selection = null else lassoPick++
     }
 
     /** Elige estas cosas, que tienen que estar en la nota (por ejemplo, una imagen recién puesta). */
@@ -2110,14 +2117,44 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         val lasso = Lasso(path.toArray())
         val f = lassoFilter
-        val chosen = strokes.filter { s ->
-            f.accepts(s.tool) && !s.left.isNaN() && lasso.intersects(s.left, s.top, s.right, s.bottom) &&
-                lasso.containsMostOf(s.points())
+        // La caja alcanza para descartar casi todo. Los puntos se miran después, fuera de este hilo.
+        val candidates = ArrayList<InkStroke>()
+        for (s in strokes) {
+            if (f.accepts(s.tool) && !s.left.isNaN() && lasso.intersects(s.left, s.top, s.right, s.bottom)) {
+                candidates.add(s)
+            }
         }
         val chosenImages = if (f.images) images.filter { !it.locked && lasso.contains(it.centerX, it.centerY) } else emptyList()
         val chosenTexts = if (f.texts) texts.filter { Elements.textBounds(it).let { b -> lasso.contains(b.centerX(), b.centerY()) } } else emptyList()
         val chosenWidgets = if (f.widgets) widgets.filter { lasso.contains(it.centerX, it.centerY) } else emptyList()
-        selection = Selection(chosen, chosenImages, chosenTexts, chosenWidgets)
+        if (candidates.isEmpty()) {
+            selection = Selection(emptyList(), chosenImages, chosenTexts, chosenWidgets)
+            return
+        }
+        // Ni se decodifica un arreglo de puntos por trazo ni se hace en el hilo de la pantalla.
+        // La regla sigue siendo la misma: adentro al menos la mitad de los puntos.
+        val token = ++lassoPick
+        selectionWork.execute {
+            val chosen = ArrayList<InkStroke>(candidates.size)
+            for (s in candidates) if (lasso.containsMostOf(s.encoded())) chosen.add(s)
+            post {
+                if (token != lassoPick) return@post
+                selection = Selection(
+                    stillThere(chosen, strokes),
+                    stillThere(chosenImages, images),
+                    stillThere(chosenTexts, texts),
+                    stillThere(chosenWidgets, widgets),
+                )
+            }
+        }
+    }
+
+    /** Lo elegido que sigue en la nota cuando el conteo de puntos termina. */
+    private fun <T> stillThere(picked: List<T>, live: List<T>): List<T> {
+        if (picked.isEmpty()) return picked
+        val have = Collections.newSetFromMap(IdentityHashMap<T, Boolean>(live.size * 2 + 1))
+        have.addAll(live)
+        return picked.filter { it in have }
     }
 
     /** Un toque con el lazo elige lo que está debajo: un texto, un trazo, un widget o una imagen. */

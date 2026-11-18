@@ -1,5 +1,7 @@
 package com.octavio.tinta.model
 
+import com.octavio.tinta.storage.StrokeCodec
+
 /** Qué puede agarrar el lazo. */
 data class LassoFilter(
     val pens: Boolean = true,
@@ -62,5 +64,19 @@ class Lasso(private val xy: FloatArray) {
         var inside = 0
         for (i in 0 until count) if (contains(points[2 * i], points[2 * i + 1])) inside++
         return 2 * inside >= count
+    }
+
+    /**
+     * Lo mismo leyendo los bytes de [StrokeCodec], sin armar el arreglo de puntos. No asigna nada
+     * por trazo: el lazo puede probar miles de candidatos sin llenar la memoria.
+     */
+    fun containsMostOf(encoded: ByteArray): Boolean {
+        var total = 0
+        var inside = 0
+        StrokeCodec.forEachXY(encoded) { x, y ->
+            total++
+            if (contains(x, y)) inside++
+        }
+        return total > 0 && 2 * inside >= total
     }
 }
