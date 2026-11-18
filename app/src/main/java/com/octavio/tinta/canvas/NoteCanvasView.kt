@@ -36,6 +36,7 @@ import androidx.ink.strokes.StrokeInput
 import androidx.input.motionprediction.MotionEventPredictor
 import com.octavio.tinta.Diag
 import com.octavio.tinta.R
+import com.octavio.tinta.input.StylusButtonClicks
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
 import com.octavio.tinta.storage.VistaCache
@@ -652,13 +653,12 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private var lastButtons = 0
 
-    /** El último flanco del botón, para no contarlo dos veces (tecla y evento a la vez). */
-    private var lastButtonAt = Long.MIN_VALUE
+    /** Un clic por toque, aunque llegue por el lápiz, por una tecla y por el control Bluetooth. */
+    private val stylusClicks = StylusButtonClicks()
 
     /**
      * Sigue los botones que informa el lápiz en sus propios eventos: los deja en el registro (para
-     * ver qué manda cada tablet). El botón sólo manda el flanco, no cuánto está apretado: cada
-     * toque avisa con [Listener.onStylusButtonClick].
+     * ver qué manda cada tablet). Cuenta el flanco de apretar, no el de soltar.
      */
     private fun logButtons(e: MotionEvent) {
         if (e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) return // los botones del mouse son otra cosa
@@ -668,18 +668,16 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val wasPressed = lastButtons and STYLUS_BUTTONS != 0
         lastButtons = buttons
         Diag.log("botones del lápiz: 0x${Integer.toHexString(buttons)} acción ${MotionEvent.actionToString(e.actionMasked)} herramienta ${e.getToolType(0)}")
-        if ((pressed && !wasPressed) || (!pressed && wasPressed)) stylusButton(e.eventTime)
+        if (stylusClicks.onButtonEdge(wasPressed, pressed, e.eventTime)) listener?.onStylusButtonClick()
     }
 
-    /** Un toque del botón lateral. El mismo clic puede llegar por dos caminos: cuenta una sola vez. */
-    private fun stylusButton(time: Long) {
-        if (time - lastButtonAt < 350L) return
-        lastButtonAt = time
-        listener?.onStylusButtonClick()
+    /**
+     * El botón lateral cuando llega como tecla (el lápiz o su control por Bluetooth).
+     * [down] en false es el soltar: no alterna, aunque la tecla se haya sostenido.
+     */
+    fun penButton(down: Boolean, time: Long) {
+        if (stylusClicks.onKey(down, time)) listener?.onStylusButtonClick()
     }
-
-    /** El botón lateral cuando llega como tecla (el lápiz o su control por Bluetooth). */
-    fun penButton(down: Boolean, time: Long) = stylusButton(time)
 
     /** Dónde se apoyó la punta, para pasar al borrador si se queda quieta. */
     private var eraserFromX = 0f
@@ -719,12 +717,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private fun penButtonDeviceEvent(e: MotionEvent) {
         Diag.log("lápiz Bluetooth: ${MotionEvent.actionToString(e.actionMasked)} botones 0x${Integer.toHexString(e.buttonState)} de ${InputDevice.getDevice(e.deviceId)?.name}")
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS,
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_BUTTON_RELEASE,
-            MotionEvent.ACTION_SCROLL,
-            -> stylusButton(e.eventTime)
-        }
+        // El scroll del control no es un clic, y soltar tampoco: si no, un toque largo alterna dos veces.
+        if (stylusClicks.onDevice(e.actionMasked, e.eventTime)) listener?.onStylusButtonClick()
     }
 
     /** Apretar o soltar el botón lateral con el lápiz en el aire llega por acá. */
