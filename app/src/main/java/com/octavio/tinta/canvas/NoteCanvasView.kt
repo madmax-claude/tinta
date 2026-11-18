@@ -29,6 +29,9 @@ import androidx.ink.geometry.AffineTransform
 import androidx.ink.geometry.ImmutableBox
 import androidx.ink.geometry.ImmutableSegment
 import androidx.ink.geometry.ImmutableVec
+import androidx.ink.geometry.MutableBox
+import androidx.ink.geometry.MutableSegment
+import androidx.ink.geometry.MutableVec
 import androidx.ink.geometry.Intersection.intersects
 import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
@@ -37,6 +40,7 @@ import androidx.input.motionprediction.MotionEventPredictor
 import com.octavio.tinta.Diag
 import com.octavio.tinta.R
 import com.octavio.tinta.input.FingerAdmit
+import com.octavio.tinta.input.StylusButtonClicks
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
 import com.octavio.tinta.storage.VistaCache
@@ -285,6 +289,18 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     private val erased = ArrayList<Pair<Int, InkStroke>>()
     private var eraseX = 0f
     private var eraseY = 0f
+
+    /**
+     * Muestras del borrador en el evento en curso, en el mundo. Se reutilizan: un arrastre no arma
+     * una lista nueva por cada punto histórico.
+     */
+    private var eraseXs = FloatArray(64)
+    private var eraseYs = FloatArray(64)
+
+    /** Caja y segmento de la goma, rellenados en cada prueba para no crear objetos por muestra. */
+    private val eraseCenter = MutableVec()
+    private val eraseBox = MutableBox()
+    private val eraseSegment = MutableSegment()
 
     /** Línea recta en curso (resaltador recto), en el mundo, con su vista previa. */
     private var lineStart: PointF? = null
@@ -663,13 +679,12 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private var lastButtons = 0
 
-    /** El último flanco del botón, para no contarlo dos veces (tecla y evento a la vez). */
-    private var lastButtonAt = Long.MIN_VALUE
+    /** Un clic por toque, aunque llegue por el lápiz, por una tecla y por el control Bluetooth. */
+    private val stylusClicks = StylusButtonClicks()
 
     /**
      * Sigue los botones que informa el lápiz en sus propios eventos: los deja en el registro (para
-     * ver qué manda cada tablet). El botón sólo manda el flanco, no cuánto está apretado: cada
-     * toque avisa con [Listener.onStylusButtonClick].
+     * ver qué manda cada tablet). Cuenta el flanco de apretar, no el de soltar.
      */
     private fun logButtons(e: MotionEvent) {
         if (e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) return // los botones del mouse son otra cosa
@@ -679,18 +694,16 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val wasPressed = lastButtons and STYLUS_BUTTONS != 0
         lastButtons = buttons
         Diag.log("botones del lápiz: 0x${Integer.toHexString(buttons)} acción ${MotionEvent.actionToString(e.actionMasked)} herramienta ${e.getToolType(0)}")
-        if ((pressed && !wasPressed) || (!pressed && wasPressed)) stylusButton(e.eventTime)
+        if (stylusClicks.onButtonEdge(wasPressed, pressed, e.eventTime)) listener?.onStylusButtonClick()
     }
 
-    /** Un toque del botón lateral. El mismo clic puede llegar por dos caminos: cuenta una sola vez. */
-    private fun stylusButton(time: Long) {
-        if (time - lastButtonAt < 350L) return
-        lastButtonAt = time
-        listener?.onStylusButtonClick()
+    /**
+     * El botón lateral cuando llega como tecla (el lápiz o su control por Bluetooth).
+     * [down] en false es el soltar: no alterna, aunque la tecla se haya sostenido.
+     */
+    fun penButton(down: Boolean, time: Long) {
+        if (stylusClicks.onKey(down, time)) listener?.onStylusButtonClick()
     }
-
-    /** El botón lateral cuando llega como tecla (el lápiz o su control por Bluetooth). */
-    fun penButton(down: Boolean, time: Long) = stylusButton(time)
 
     /** Dónde se apoyó la punta, para pasar al borrador si se queda quieta. */
     private var eraserFromX = 0f
@@ -730,12 +743,8 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     private fun penButtonDeviceEvent(e: MotionEvent) {
         Diag.log("lápiz Bluetooth: ${MotionEvent.actionToString(e.actionMasked)} botones 0x${Integer.toHexString(e.buttonState)} de ${InputDevice.getDevice(e.deviceId)?.name}")
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS,
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_BUTTON_RELEASE,
-            MotionEvent.ACTION_SCROLL,
-            -> stylusButton(e.eventTime)
-        }
+        // El scroll del control no es un clic, y soltar tampoco: si no, un toque largo alterna dos veces.
+        if (stylusClicks.onDevice(e.actionMasked, e.eventTime)) listener?.onStylusButtonClick()
     }
 
     /** Apretar o soltar el botón lateral con el lápiz en el aire llega por acá. */
@@ -939,10 +948,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             return
         }
         if (erasing) {
-            for (h in 0 until e.historySize) {
-                eraseTo(inX(e.getHistoricalX(i, h)), inY(e.getHistoricalY(i, h)))
-            }
-            eraseTo(inX(e.getX(i)), inY(e.getY(i)))
+            // Todas las muestras de este evento, de una sola pasada: si no, cada punto histórico
+            // recorre la nota entera y puede sincronizar las tandas.
+            eraseMove(e, i)
             setCursor(PointF(e.getX(i), e.getY(i)))
             return
         }
@@ -1534,42 +1542,74 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     /**
-     * Saca los trazos que toca el borrador entre la posición anterior y (x, y), en el mundo. El
-     * radio está en dp de pantalla, así que borra lo mismo a cualquier zoom.
+     * Un punto del borrador (el apoyo de la punta). Un arrastre usa [eraseMove]: junta las muestras
+     * y borra una sola vez. El radio está en dp de pantalla, así que borra lo mismo a cualquier zoom.
      */
     private fun eraseTo(x: Float, y: Float) {
+        eraseXs[0] = x
+        eraseYs[0] = y
+        eraseAlong(1)
+    }
+
+    /**
+     * ACTION_MOVE del borrador. El recorrido es la posición anterior, después cada muestra histórica
+     * (de la más vieja a la más nueva) y al final la actual. Se barre la lista de trazos una vez y,
+     * si algo cambió, `strokesChanged` corre una sola vez.
+     */
+    private fun eraseMove(e: MotionEvent, pointerIndex: Int) {
+        val n = e.historySize + 1
+        if (eraseXs.size < n) {
+            var cap = eraseXs.size.coerceAtLeast(1)
+            while (cap < n) cap *= 2
+            eraseXs = FloatArray(cap)
+            eraseYs = FloatArray(cap)
+        }
+        for (h in 0 until n - 1) {
+            eraseXs[h] = inX(e.getHistoricalX(pointerIndex, h))
+            eraseYs[h] = inY(e.getHistoricalY(pointerIndex, h))
+        }
+        eraseXs[n - 1] = inX(e.getX(pointerIndex))
+        eraseYs[n - 1] = inY(e.getY(pointerIndex))
+        eraseAlong(n)
+    }
+
+    /**
+     * Borra a lo largo de [eraseXs]/[eraseYs] (n puntos), partiendo de [eraseX]/[eraseY]. Lo que se
+     * ve es lo mismo que ir muestra por muestra: cada tramo se prueba con la caja del punto y el
+     * segmento que llega hasta él, y la goma parcial corta en ese orden. Los pedazos de un corte
+     * quedan en el mismo lugar o más arriba, así que este barrido hacia atrás no se saltea trazos.
+     */
+    private fun eraseAlong(n: Int) {
+        if (n <= 0) return
         val r = eraserRadius * density / inScale
-        val box = ImmutableBox.fromCenterAndDimensions(ImmutableVec(x, y), 2 * r, 2 * r)
-        val moved = abs(x - eraseX) + abs(y - eraseY) > 0f
-        val segment = if (moved) ImmutableSegment(ImmutableVec(eraseX, eraseY), ImmutableVec(x, y)) else null
-        val left = min(x, eraseX) - r
-        val right = max(x, eraseX) + r
-        val top = min(y, eraseY) - r
-        val bottom = max(y, eraseY) + r
+        var left = eraseX
+        var right = eraseX
+        var top = eraseY
+        var bottom = eraseY
+        for (k in 0 until n) {
+            val x = eraseXs[k]
+            val y = eraseYs[k]
+            if (x < left) left = x
+            if (x > right) right = x
+            if (y < top) top = y
+            if (y > bottom) bottom = y
+        }
+        left -= r
+        right += r
+        top -= r
+        bottom += r
         var changed = false
         var groups: HashSet<Long>? = null
         for (i in strokes.indices.reversed()) {
             val s = strokes[i]
             if (!s.intersects(left, top, right, bottom)) continue
-            val shape = s.stroke?.shape ?: continue // sin malla todavía: no está a la vista
-            if (box.intersects(shape, AffineTransform.IDENTITY) ||
-                segment?.intersects(shape, AffineTransform.IDENTITY) == true
-            ) {
-                if (partialErase) {
-                    // Se cambia el trazo por los pedazos que quedan afuera de la goma.
-                    val pieces = cut(s, eraseX, eraseY, x, y, r) ?: continue
-                    if (s.group != 0L) cutGroups.add(s.group)
-                    strokes.removeAt(i)
-                    cutEdits.add(History.Remove(strokes, listOf(i to s)))
-                    if (pieces.isNotEmpty()) {
-                        strokes.addAll(i, pieces)
-                        cutEdits.add(History.Insert(strokes, i, pieces))
-                    }
-                } else {
-                    strokes.removeAt(i)
-                    erased.add(i to s)
-                    if (s.group != 0L) (groups ?: HashSet<Long>().also { groups = it }).add(s.group)
-                }
+            if (s.stroke == null) continue // sin malla todavía: no está a la vista
+            if (partialErase) {
+                if (erasePartial(i, n, r)) changed = true
+            } else if (eraserHits(s, n, r)) {
+                strokes.removeAt(i)
+                erased.add(i to s)
+                if (s.group != 0L) (groups ?: HashSet<Long>().also { groups = it }).add(s.group)
                 changed = true
             }
         }
@@ -1583,9 +1623,92 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 }
             }
         }
-        eraseX = x
-        eraseY = y
+        eraseX = eraseXs[n - 1]
+        eraseY = eraseYs[n - 1]
         if (changed) dry.strokesChanged()
+    }
+
+    /** Si algún tramo del recorrido toca la malla de [s]. */
+    private fun eraserHits(s: InkStroke, n: Int, r: Float): Boolean {
+        var ax = eraseX
+        var ay = eraseY
+        for (k in 0 until n) {
+            val bx = eraseXs[k]
+            val by = eraseYs[k]
+            if (eraserTouches(s, ax, ay, bx, by, r)) return true
+            ax = bx
+            ay = by
+        }
+        return false
+    }
+
+    /**
+     * Goma parcial sobre el trazo que está en [index] y sobre los pedazos que lo van reemplazando.
+     * Cada muestra se aplica en orden, como antes, pero sin volver a recorrer el resto de la nota
+     * ni reconstruir las tandas hasta el final del evento.
+     */
+    private fun erasePartial(index: Int, n: Int, r: Float): Boolean {
+        var start = index
+        var end = index
+        var px = eraseX
+        var py = eraseY
+        var changed = false
+        for (k in 0 until n) {
+            val x = eraseXs[k]
+            val y = eraseYs[k]
+            var j = end
+            while (j >= start) {
+                val s = strokes[j]
+                val pieces = if (eraserTouches(s, px, py, x, y, r)) cut(s, px, py, x, y, r) else null
+                if (pieces == null) {
+                    j--
+                    continue
+                }
+                // Se cambia el trazo por los pedazos que quedan afuera de la goma.
+                if (s.group != 0L) cutGroups.add(s.group)
+                strokes.removeAt(j)
+                cutEdits.add(History.Remove(strokes, listOf(j to s)))
+                if (pieces.isNotEmpty()) {
+                    strokes.addAll(j, pieces)
+                    cutEdits.add(History.Insert(strokes, j, pieces))
+                    end += pieces.size - 1
+                } else {
+                    end -= 1
+                }
+                changed = true
+                // Los pedazos nuevos son de esta misma muestra: no se vuelven a cortar con ella.
+                j--
+            }
+            px = x
+            py = y
+        }
+        return changed
+    }
+
+    /**
+     * La goma, de (ax, ay) a (bx, by), toca la malla. La caja es la del punto de llegada; el
+     * segmento cubre el tramo desde el punto anterior. Sin movimiento no hay segmento, igual que
+     * antes.
+     */
+    private fun eraserTouches(s: InkStroke, ax: Float, ay: Float, bx: Float, by: Float, r: Float): Boolean {
+        val left = min(ax, bx) - r
+        val top = min(ay, by) - r
+        val right = max(ax, bx) + r
+        val bottom = max(ay, by) + r
+        if (!s.intersects(left, top, right, bottom)) return false
+        val shape = s.stroke?.shape ?: return false
+        eraseCenter.x = bx
+        eraseCenter.y = by
+        eraseBox.populateFromCenterAndDimensions(eraseCenter, 2 * r, 2 * r)
+        if (eraseBox.intersects(shape, AffineTransform.IDENTITY)) return true
+        if (abs(bx - ax) + abs(by - ay) > 0f) {
+            eraseSegment.start.x = ax
+            eraseSegment.start.y = ay
+            eraseSegment.end.x = bx
+            eraseSegment.end.y = by
+            if (eraseSegment.intersects(shape, AffineTransform.IDENTITY)) return true
+        }
+        return false
     }
 
     /**
