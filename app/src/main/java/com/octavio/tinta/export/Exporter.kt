@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import androidx.core.content.FileProvider
 import com.octavio.tinta.hint
 import com.octavio.tinta.model.Note
+import com.octavio.tinta.model.PageLayout
 import com.octavio.tinta.storage.HandText
 import com.octavio.tinta.storage.NoteStore
 import com.octavio.tinta.toast
@@ -44,9 +45,13 @@ object Exporter {
         if (n.pages.paged) {
             val used = n.pages.used(if (bounds == null) Float.NaN else n.pages.endOf(bounds.right, bounds.bottom))
             // Unos 250 puntos por pulgada: se lee bien en el celular y no pesa tanto.
-            val width = (n.pages.width * PAGE_PX_PER_DP).toInt()
+            val width = pngPageWidth(n.pages)
+            // Render.page solo decodifica a 256 px (la tira). Acá el lado es el del bitmap.
+            val imageSide = pagePngImageSide(n.pages)
             for (k in 0 until used) {
-                val bitmap = Render.page(strokes, n.images, n.texts, n.widgets, n.background, n.pages, k, width, n.paperColor)
+                val bitmap = Render.page(
+                    strokes, n.images, n.texts, n.widgets, n.background, n.pages, k, width, n.paperColor, imageSide,
+                )
                 out.add(save(context, bitmap, if (used == 1) name else "$name - hoja ${k + 1}"))
             }
         } else {
@@ -54,9 +59,32 @@ object Exporter {
             val r = android.graphics.RectF(b.left - MARGIN, b.top - MARGIN, b.right + MARGIN, b.bottom + MARGIN)
             val scale = min(2f, min(MAX_SIDE / max(r.width(), r.height()), sqrt(MAX_PIXELS / (r.width() * r.height()))))
             val count = n.pages.count(b.bottom)
-            out.add(save(context, Render.area(strokes, n.images, n.texts, n.widgets, n.background, n.pages, count, r, scale, n.paperColor), name))
+            val bitmap = Render.area(
+                strokes, n.images, n.texts, n.widgets, n.background, n.pages, count, r, scale, n.paperColor,
+                areaPngImageSide(r.width(), r.height(), scale),
+            )
+            out.add(save(context, bitmap, name))
         }
         return out
+    }
+
+    /** Ancho en px de una hoja exportada a PNG. */
+    internal fun pngPageWidth(pages: PageLayout): Int =
+        (pages.width * PAGE_PX_PER_DP).toInt()
+
+    /**
+     * Lado al decodificar las fotos de una hoja en el PNG: el lado mayor del bitmap, no los 256 px
+     * de la tira de miniaturas.
+     */
+    internal fun pagePngImageSide(pages: PageLayout): Int {
+        val width = pngPageWidth(pages)
+        return Render.pngImageSide(width, Render.pagePixelHeight(pages, width))
+    }
+
+    /** Lado al decodificar las fotos de una nota infinita exportada a PNG, a `scale` px por dp. */
+    internal fun areaPngImageSide(worldWidth: Float, worldHeight: Float, scale: Float): Int {
+        val (width, height) = Render.pixelSize(worldWidth, worldHeight, scale)
+        return Render.pngImageSide(width, height)
     }
 
     private fun save(context: Context, bitmap: Bitmap, name: String): File {
@@ -94,21 +122,45 @@ object Exporter {
      * La nota entera en un archivo `.tinta`: un zip con la nota, sus medios y la miniatura. Llamar
      * desde el hilo de disco de [NoteStore], después de guardarla.
      */
-    fun noteBundle(context: Context, store: NoteStore, n: Note): File {
-        val f = File(dir(context), Render.fileName(n.title) + BUNDLE_EXT)
+    fun noteBundle(context: Context, store: NoteStore, n: Note): File =
+        writeBundle(dir(context), store.files(), n)
+
+    /**
+     * Archivos de una nota que entran en el `.tinta`. [NoteStore] ya los tiene; un test arma los
+     * suyos en una carpeta temporal, sin Android.
+     */
+    internal interface NoteFiles {
+        fun newId(): String
+        fun file(id: String): File
+        fun thumbnail(id: String): File
+        fun mediaDir(id: String): File
+        fun delete(id: String)
+    }
+
+    private fun NoteStore.files(): NoteFiles = object : NoteFiles {
+        override fun newId() = this@files.newId()
+        override fun file(id: String) = this@files.file(id)
+        override fun thumbnail(id: String) = this@files.thumbnail(id)
+        override fun mediaDir(id: String) = this@files.mediaDir(id)
+        override fun delete(id: String) = this@files.delete(id)
+    }
+
+    internal fun writeBundle(exportDir: File, files: NoteFiles, n: Note): File {
+        exportDir.mkdirs()
+        val f = File(exportDir, Render.fileName(n.title) + BUNDLE_EXT)
         ZipOutputStream(f.outputStream().buffered()).use { zip ->
             zip.putNextEntry(ZipEntry(MANIFEST))
             zip.write(JSONObject().put("app", "Tinta").put("version", 1).put("titulo", n.title).toString(2).toByteArray())
             zip.closeEntry()
             zip.putNextEntry(ZipEntry(NOTE_ENTRY))
-            store.file(n.id).inputStream().use { it.copyTo(zip) }
+            files.file(n.id).inputStream().use { it.copyTo(zip) }
             zip.closeEntry()
-            store.thumbnail(n.id).takeIf { it.exists() }?.let { t ->
+            files.thumbnail(n.id).takeIf { it.exists() }?.let { t ->
                 zip.putNextEntry(ZipEntry(THUMB_ENTRY))
                 t.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
             }
-            store.mediaDir(n.id).listFiles()?.filter { it.isFile && !it.name.endsWith(".tmp") }?.forEach { m ->
+            files.mediaDir(n.id).listFiles()?.filter { it.isFile && !it.name.endsWith(".tmp") }?.forEach { m ->
                 zip.putNextEntry(ZipEntry(MEDIA_DIR + m.name))
                 m.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
@@ -141,10 +193,12 @@ object Exporter {
      * Trae una nota de Tinta exportada como nota nueva (con otro id, así no pisa ninguna). Llamar
      * desde el hilo de disco. Devuelve la nota leída.
      */
-    fun importBundle(store: NoteStore, input: InputStream): Note {
-        val id = store.newId()
-        val media = store.mediaDir(id)
-        val target = store.file(id)
+    fun importBundle(store: NoteStore, input: InputStream): Note = readBundle(store.files(), input)
+
+    internal fun readBundle(files: NoteFiles, input: InputStream): Note {
+        val id = files.newId()
+        val media = files.mediaDir(id)
+        val target = files.file(id)
         val tmp = File(target.path + ".tmp")
         var hasNote = false
         var isTinta = false
@@ -160,7 +214,7 @@ object Exporter {
                             tmp.outputStream().use { zip.copyTo(it) }
                             hasNote = true
                         }
-                        name == THUMB_ENTRY -> store.thumbnail(id).outputStream().use { zip.copyTo(it) }
+                        name == THUMB_ENTRY -> files.thumbnail(id).outputStream().use { zip.copyTo(it) }
                         name.startsWith(MEDIA_DIR) -> {
                             val file = File(media, name.removePrefix(MEDIA_DIR))
                             // Nada fuera de la carpeta de medios (un nombre con "../").
@@ -175,7 +229,7 @@ object Exporter {
             return note
         } catch (e: Exception) {
             tmp.delete()
-            store.delete(id)
+            files.delete(id)
             throw e
         }
     }

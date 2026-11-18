@@ -33,6 +33,17 @@ object Render {
     /** Límite práctico del tamaño de página en los visores de PDF. */
     private const val PDF_MAX_PT = 14400f
 
+    /** 72 pt por pulgada y 160 dp por pulgada: la hoja del PDF sale del tamaño real. */
+    private const val PDF_PT_PER_DP = 72f / 160f
+
+    /**
+     * Lado mayor al decodificar una foto. La tira de miniaturas usa el chico; un recorte y el PDF,
+     * uno grande. El PNG pide [pngImageSide]: el lado del bitmap, nunca el de la tira.
+     */
+    const val THUMB_IMAGE_SIDE = 256
+    const val AREA_IMAGE_SIDE = 2048
+    const val PDF_IMAGE_SIDE = 3000
+
     fun bounds(
         strokes: List<InkStroke>,
         images: List<NoteImage> = emptyList(),
@@ -113,7 +124,7 @@ object Render {
             val page = doc.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create())
             val tx = (MARGIN - b.left) * scale
             val ty = (MARGIN - b.top) * scale
-            draw(page.canvas, strokes, images, texts, widgets, 3000, background, pages, 1, scale, tx, ty, pageWidth.toFloat(), pageHeight.toFloat(), paper)
+            draw(page.canvas, strokes, images, texts, widgets, PDF_IMAGE_SIDE, background, pages, 1, scale, tx, ty, pageWidth.toFloat(), pageHeight.toFloat(), paper)
             doc.finishPage(page)
             return write(context, title, doc)
         } finally {
@@ -135,12 +146,10 @@ object Render {
     ): File {
         val box = bounds(strokes, images, texts, widgets)
         val used = pages.used(if (box == null) Float.NaN else pages.endOf(box.right, box.bottom))
-        val chosen = (only ?: (0 until used).toList()).filter { it in 0 until used }.distinct()
-        val sheets = if (chosen.isEmpty()) (0 until used).toList() else chosen
+        val sheets = sheetsToExport(used, only)
         // 160 dp por pulgada, 72 pt por pulgada: la hoja sale del tamaño real.
-        val scale = 72f / 160f
-        val pageWidth = (pages.width * scale).toInt()
-        val pageHeight = (pages.height * scale).toInt()
+        val scale = PDF_PT_PER_DP
+        val (pageWidth, pageHeight) = pdfPagePoints(pages)
         val paper = Paper(vector = true, color = paperColor)
         val doc = PdfDocument()
         try {
@@ -148,7 +157,7 @@ object Render {
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, n + 1).create())
                 val tx = -pages.pageLeft(k) * scale
                 val ty = -pages.pageTop(k) * scale
-                draw(page.canvas, strokes, images, texts, widgets, 3000, background, pages, used, scale, tx, ty, pageWidth.toFloat(), pageHeight.toFloat(), paper)
+                draw(page.canvas, strokes, images, texts, widgets, PDF_IMAGE_SIDE, background, pages, used, scale, tx, ty, pageWidth.toFloat(), pageHeight.toFloat(), paper)
                 doc.finishPage(page)
             }
             return write(context, title, doc)
@@ -164,7 +173,7 @@ object Render {
         return file
     }
 
-    /** `imageSide`: lado mayor con que se decodifican las imágenes (miniatura chica, PDF grande). */
+    /** `imageSide`: lado mayor con que se decodifican las imágenes (miniatura chica, PNG y PDF grandes). */
     private fun draw(
         canvas: Canvas,
         strokes: List<InkStroke>,
@@ -230,18 +239,21 @@ object Render {
         r: RectF,
         scale: Float,
         paperColor: Int? = null,
+        imageSide: Int = AREA_IMAGE_SIDE,
     ): Bitmap {
-        val width = ceil(r.width() * scale).toInt().coerceAtLeast(1)
-        val height = ceil(r.height() * scale).toInt().coerceAtLeast(1)
+        val (width, height) = pixelSize(r.width(), r.height(), scale)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         draw(
-            Canvas(bitmap), strokes, images, texts, widgets, 2048, background, pages, pageCount, scale,
+            Canvas(bitmap), strokes, images, texts, widgets, imageSide, background, pages, pageCount, scale,
             -r.left * scale, -r.top * scale, width.toFloat(), height.toFloat(), Paper(color = paperColor),
         )
         return bitmap
     }
 
-    /** La hoja `k` entera, de `width` px de ancho, para la tira de miniaturas. */
+    /**
+     * La hoja `k` entera, de `width` px de ancho. Sin [imageSide] decodifica las fotos chicas
+     * ([THUMB_IMAGE_SIDE]): es la tira de miniaturas. El PNG de exportación pasa el lado del bitmap.
+     */
     fun page(
         strokes: List<InkStroke>,
         images: List<NoteImage>,
@@ -252,12 +264,13 @@ object Render {
         k: Int,
         width: Int,
         paperColor: Int? = null,
+        imageSide: Int = THUMB_IMAGE_SIDE,
     ): Bitmap {
         val scale = width / pages.width
-        val height = (pages.height * scale).toInt().coerceAtLeast(1)
+        val height = pagePixelHeight(pages, width)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         draw(
-            Canvas(bitmap), strokes, images, texts, widgets, 256, background, pages, k + 1, scale,
+            Canvas(bitmap), strokes, images, texts, widgets, imageSide, background, pages, k + 1, scale,
             -pages.pageLeft(k) * scale, -pages.pageTop(k) * scale, width.toFloat(), height.toFloat(), Paper(color = paperColor),
         )
         return bitmap
@@ -288,4 +301,33 @@ object Render {
 
     fun fileName(title: String): String =
         title.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().ifEmpty { "nota" }.take(80)
+
+    /**
+     * Hojas a poner en el PDF, de las `used` primeras. `only` null: todas. Si lo pedido queda
+     * vacío (ningún índice existe), se exportan todas igual.
+     */
+    internal fun sheetsToExport(used: Int, only: List<Int>?): List<Int> {
+        val chosen = (only ?: (0 until used).toList()).filter { it in 0 until used }.distinct()
+        return if (chosen.isEmpty()) (0 until used).toList() else chosen
+    }
+
+    /** Ancho y alto de una hoja en puntos del PDF (1 dp = 72/160 pt). */
+    internal fun pdfPagePoints(pages: PageLayout): Pair<Int, Int> =
+        (pages.width * PDF_PT_PER_DP).toInt() to (pages.height * PDF_PT_PER_DP).toInt()
+
+    /** Alto en px de una hoja dibujada a `width` px de ancho. */
+    internal fun pagePixelHeight(pages: PageLayout, width: Int): Int =
+        (pages.height * (width / pages.width)).toInt().coerceAtLeast(1)
+
+    /** Ancho y alto en px de un rectángulo del mundo a `scale` px por dp. */
+    internal fun pixelSize(worldWidth: Float, worldHeight: Float, scale: Float): Pair<Int, Int> =
+        ceil(worldWidth * scale).toInt().coerceAtLeast(1) to ceil(worldHeight * scale).toInt().coerceAtLeast(1)
+
+    /**
+     * Lado al decodificar una foto para un PNG de `bitmapWidth` × `bitmapHeight`. Es el lado mayor
+     * del bitmap (una foto a hoja completa sale tan nítida como el archivo) y nunca el de la
+     * miniatura: como piso, el mismo lado que un recorte.
+     */
+    fun pngImageSide(bitmapWidth: Int, bitmapHeight: Int): Int =
+        max(bitmapWidth, bitmapHeight).coerceAtLeast(AREA_IMAGE_SIDE)
 }
