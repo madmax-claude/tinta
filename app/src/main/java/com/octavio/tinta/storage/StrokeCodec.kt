@@ -110,21 +110,48 @@ object StrokeCodec {
 
     /** Sólo las coordenadas, en pares (x, y), para elegir con el lazo sin armar la malla. */
     fun points(bytes: ByteArray): FloatArray {
-        val input = DataInputStream(bytes.inputStream())
-        input.readUnsignedByte()
-        val flags = input.readUnsignedByte()
-        input.readFloat()
-        input.readInt()
-        val n = input.readInt()
-        val extra = Integer.bitCount(flags and (PRESSURE or TILT or ORIENTATION))
+        var n = 0
+        forEachXY(bytes) { _, _ -> n++ }
         val xy = FloatArray(2 * n)
-        for (i in 0 until n) {
-            xy[2 * i] = input.readFloat()
-            xy[2 * i + 1] = input.readFloat()
-            input.skipBytes(4 + 4 * extra)
+        var i = 0
+        forEachXY(bytes) { x, y ->
+            xy[i++] = x
+            xy[i++] = y
         }
         return xy
     }
+
+    /**
+     * Recorre x, y de cada punto sin armar un arreglo. El formato es el de [encode]: no asigna
+     * nada por trazo. Si los bytes están cortados, no visita nada.
+     */
+    inline fun forEachXY(bytes: ByteArray, visit: (Float, Float) -> Unit) {
+        if (bytes.size < HEADER) return
+        val flags = bytes[1].toInt() and 0xFF
+        // 1 presión, 2 inclinación, 4 orientación: los mismos bits que el encabezado.
+        val extra = Integer.bitCount(flags and 7)
+        val stride = 12 + 4 * extra
+        val n = readIntBE(bytes, 10)
+        if (n <= 0 || stride <= 0 || n > (bytes.size - HEADER) / stride) return
+        var i = HEADER
+        repeat(n) {
+            visit(readFloatBE(bytes, i), readFloatBE(bytes, i + 4))
+            i += stride
+        }
+    }
+
+    @PublishedApi
+    internal const val HEADER = 14
+
+    @PublishedApi
+    internal fun readIntBE(bytes: ByteArray, i: Int): Int =
+        ((bytes[i].toInt() and 0xFF) shl 24) or
+            ((bytes[i + 1].toInt() and 0xFF) shl 16) or
+            ((bytes[i + 2].toInt() and 0xFF) shl 8) or
+            (bytes[i + 3].toInt() and 0xFF)
+
+    @PublishedApi
+    internal fun readFloatBE(bytes: ByteArray, i: Int): Float = Float.fromBits(readIntBE(bytes, i))
 
     fun decode(bytes: ByteArray): MutableStrokeInputBatch {
         val input = DataInputStream(bytes.inputStream())
