@@ -449,6 +449,7 @@ class MainActivity : TintaActivity() {
             textSize = 16f
             setTextColor(getColor(R.color.ink))
             isChecked = prefs.holdToErase
+            minimumHeight = dp(48f).toInt()
             setPadding(0, dp(16f).toInt(), 0, 0)
             setOnCheckedChangeListener { _, on -> prefs.holdToErase = on }
         })
