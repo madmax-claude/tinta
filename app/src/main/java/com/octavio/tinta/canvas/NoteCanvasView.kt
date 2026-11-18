@@ -39,6 +39,7 @@ import androidx.ink.strokes.StrokeInput
 import androidx.input.motionprediction.MotionEventPredictor
 import com.octavio.tinta.Diag
 import com.octavio.tinta.R
+import com.octavio.tinta.input.FingerAdmit
 import com.octavio.tinta.input.StylusButtonClicks
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
@@ -88,7 +89,7 @@ import kotlin.math.min
  * entre el papel y la capa de tinta. La pluma, al terminar, queda primero como trazo fresco y,
  * cuando descansa, en su capa; el resaltador pasa directo a las baldosas.
  *
- * Con el lápiz quieto: al empezar, después de un segundo pasa a borrar; al final de un trazo, el
+ * Con el lápiz quieto: al empezar, después de medio segundo pasa a borrar; al final de un trazo, el
  * trazo se cambia por la figura que se quiso hacer ([Shapes]), que sigue al lápiz hasta levantarlo.
  *
  * Con el lazo se rodea lo que se quiere elegir; lo elegido se mueve arrastrándolo y se agranda con
@@ -247,7 +248,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** El borrador saca sólo la parte del trazo que toca, en vez del trazo entero. */
     var partialErase = false
 
-    /** Mantener el lápiz quieto al apoyarlo pasa a borrar. */
+    /** Mantener la punta quieta medio segundo (500 ms) pasa a borrar hasta soltar. */
     var holdToErase = true
 
     /** Mantener el lápiz quieto al final de un trazo lo cambia por la figura más parecida. */
@@ -310,6 +311,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     /** Última vez que se vio el lápiz apoyado o cerca de la pantalla, para rechazar la palma. */
     private var lastPenSeen = 0L
+
+    /** Dónde se vio esa punta, para no tomar como dedo la mano pegada al lápiz. */
+    private var palmTipX = Float.NaN
+    private var palmTipY = Float.NaN
+
+    /** Un dedo solo, con el lápiz cerca, espera acá hasta que llegue otro. */
+    private val fingerAdmit = FingerAdmit()
 
     /** Dónde está el lápiz sin apoyar, o null si no está cerca. */
     private var hover: PointF? = null
@@ -643,6 +651,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val type = e.getToolType(0)
         if (type == MotionEvent.TOOL_TYPE_STYLUS || type == MotionEvent.TOOL_TYPE_ERASER) {
             lastPenSeen = e.eventTime
+            // Sólo la posición de la punta: el cursor del hover no se toca acá.
+            palmTipX = e.x
+            palmTipY = e.y
         }
         if (isPen(e, 0)) {
             val near = e.actionMasked != MotionEvent.ACTION_HOVER_EXIT
@@ -749,6 +760,41 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         return super.onGenericMotionEvent(e)
     }
 
+    /**
+     * ¿Este dedo entra al gesto? Si había uno esperando (el lápiz está cerca y era el único),
+     * lo agrega a [fingers] antes de aceptar a este.
+     */
+    private fun admitFinger(e: MotionEvent, i: Int): Boolean {
+        val id = e.getPointerId(i)
+        val partner = fingerAdmit.waitingId
+        val partnerDown = partner != FingerAdmit.NONE && e.findPointerIndex(partner) >= 0
+        val near = stylusNear(e.eventTime)
+        val decision = fingerAdmit.onDown(
+            id = id,
+            palm = FingerAdmit.isPalm(e.getTouchMajor(i), density, distToPalmTip(e, i), near),
+            penNear = near,
+            partnerDown = partnerDown,
+            fingersEmpty = fingers.isEmpty(),
+        )
+        if (decision.promote && partner != FingerAdmit.NONE) {
+            val w = e.findPointerIndex(partner)
+            if (w >= 0) fingers[partner] = PointF(e.getX(w), e.getY(w))
+        }
+        return decision.accept
+    }
+
+    private fun stylusNear(time: Long) =
+        penPointer != NONE || hover != null || time - lastPenSeen <= PALM_GRACE_MS
+
+    /** Distancia a la última punta vista, si el lápiz sigue cerca. */
+    private fun distToPalmTip(e: MotionEvent, i: Int): Float? {
+        val h = hover
+        val x = if (h != null) h.x else palmTipX
+        val y = if (h != null) h.y else palmTipY
+        if (x.isNaN() || !stylusNear(e.eventTime)) return null
+        return hypot(e.getX(i) - x, e.getY(i) - y)
+    }
+
     private fun pointerDown(e: MotionEvent, i: Int) {
         if (framePointer != NONE) return
         val id = e.getPointerId(i)
@@ -789,8 +835,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             }
         }
         if (!byPen) {
-            // Rechazo de palma: con el lápiz apoyado o recién levantado, los dedos no cuentan.
-            if (penPointer == NONE && e.eventTime - lastPenSeen > PALM_GRACE_MS) {
+            // Con el lápiz en el aire o recién visto, un dedo solo no mueve la hoja; dos o más sí.
+            // Con la punta apoyada escribe el lápiz y estos dedos no entran.
+            if (penPointer == NONE && admitFinger(e, i)) {
                 fingers[id] = PointF(e.getX(i), e.getY(i))
                 // Un solo dedo que no se mueve es un toque (por ejemplo, para reproducir un audio).
                 removeCallbacks(fingerHold)
@@ -813,6 +860,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (penPointer != NONE) return
         removeCallbacks(merge)
         fingers.clear() // el lápiz manda: corta cualquier desplazamiento en curso
+        fingerAdmit.clear()
         flip = null
         suppressPan = false
         cancelFlipAnim()
@@ -954,6 +1002,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             return
         }
         if (id != penPointer) {
+            fingerAdmit.onUp(id)
             if (id == tapPointer) {
                 removeCallbacks(fingerHold)
                 tapPointer = NONE
@@ -1092,6 +1141,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penPointer = NONE
         penStroke = null
         fingers.clear()
+        fingerAdmit.clear()
         flip = null
         suppressPan = false
         cancelFlipAnim()
@@ -1745,8 +1795,15 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** Copias que se arman en segundo plano; al terminar se agregan con [apply]. */
     private class Pending(val task: FutureTask<Added>, val apply: (Added) -> Unit)
 
+    /**
+     * Cierre de lazo que todavía está contando puntos. Cada cambio de selección lo deja viejo, así
+     * un resultado que llega tarde no pisa lo que el usuario eligió después.
+     */
+    private var lassoPick = 0
+
     private var selection: Selection? = null
         set(value) {
+            lassoPick++
             field = value?.takeUnless { it.isEmpty }
             dry.invalidate()
             listener?.onSelectionChanged()
@@ -1844,7 +1901,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             resizeText = null
         }
         finishPending()
-        if (selection != null) selection = null
+        if (selection != null) selection = null else lassoPick++
     }
 
     /** Elige estas cosas, que tienen que estar en la nota (por ejemplo, una imagen recién puesta). */
@@ -2060,14 +2117,44 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         val lasso = Lasso(path.toArray())
         val f = lassoFilter
-        val chosen = strokes.filter { s ->
-            f.accepts(s.tool) && !s.left.isNaN() && lasso.intersects(s.left, s.top, s.right, s.bottom) &&
-                lasso.containsMostOf(s.points())
+        // La caja alcanza para descartar casi todo. Los puntos se miran después, fuera de este hilo.
+        val candidates = ArrayList<InkStroke>()
+        for (s in strokes) {
+            if (f.accepts(s.tool) && !s.left.isNaN() && lasso.intersects(s.left, s.top, s.right, s.bottom)) {
+                candidates.add(s)
+            }
         }
         val chosenImages = if (f.images) images.filter { !it.locked && lasso.contains(it.centerX, it.centerY) } else emptyList()
         val chosenTexts = if (f.texts) texts.filter { Elements.textBounds(it).let { b -> lasso.contains(b.centerX(), b.centerY()) } } else emptyList()
         val chosenWidgets = if (f.widgets) widgets.filter { lasso.contains(it.centerX, it.centerY) } else emptyList()
-        selection = Selection(chosen, chosenImages, chosenTexts, chosenWidgets)
+        if (candidates.isEmpty()) {
+            selection = Selection(emptyList(), chosenImages, chosenTexts, chosenWidgets)
+            return
+        }
+        // Ni se decodifica un arreglo de puntos por trazo ni se hace en el hilo de la pantalla.
+        // La regla sigue siendo la misma: adentro al menos la mitad de los puntos.
+        val token = ++lassoPick
+        selectionWork.execute {
+            val chosen = ArrayList<InkStroke>(candidates.size)
+            for (s in candidates) if (lasso.containsMostOf(s.encoded())) chosen.add(s)
+            post {
+                if (token != lassoPick) return@post
+                selection = Selection(
+                    stillThere(chosen, strokes),
+                    stillThere(chosenImages, images),
+                    stillThere(chosenTexts, texts),
+                    stillThere(chosenWidgets, widgets),
+                )
+            }
+        }
+    }
+
+    /** Lo elegido que sigue en la nota cuando el conteo de puntos termina. */
+    private fun <T> stillThere(picked: List<T>, live: List<T>): List<T> {
+        if (picked.isEmpty()) return picked
+        val have = Collections.newSetFromMap(IdentityHashMap<T, Boolean>(live.size * 2 + 1))
+        have.addAll(live)
+        return picked.filter { it in have }
     }
 
     /** Un toque con el lazo elige lo que está debajo: un texto, un trazo, un widget o una imagen. */

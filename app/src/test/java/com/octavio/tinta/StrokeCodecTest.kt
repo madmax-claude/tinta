@@ -37,6 +37,32 @@ class StrokeCodecTest {
     }
 
     @Test
+    fun pointsWithEveryExtraStillLandOnTheCoordinates() {
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(bytes).use { o ->
+            o.writeByte(3)
+            o.writeByte(1 or 2 or 4)
+            o.writeFloat(-1f)
+            o.writeInt(1)
+            o.writeInt(2)
+            for ((x, y) in listOf(1f to 2f, 3f to 4f)) {
+                o.writeFloat(x)
+                o.writeFloat(y)
+                o.writeInt(0)
+                o.writeFloat(0.1f)
+                o.writeFloat(0.2f)
+                o.writeFloat(0.3f)
+            }
+        }
+        assertArrayEquals(floatArrayOf(1f, 2f, 3f, 4f), StrokeCodec.points(bytes.toByteArray()), 0f)
+    }
+
+    @Test
+    fun truncatedBytesYieldNoPoints() {
+        assertEquals(0, StrokeCodec.points(ByteArray(8)).size)
+    }
+
+    @Test
     fun transformScalesAndMovesKeepingTheRest() {
         val moved = StrokeCodec.transform(sample(), Transform(2f, 0f, 1f, -1f))
         assertArrayEquals(floatArrayOf(21f, 39f, 61f, -11f), StrokeCodec.points(moved), 0f)
