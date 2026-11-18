@@ -68,6 +68,15 @@
             style="@style/ToolButton"
             android:contentDescription="@string/export_pdf"
             android:src="@drawable/ic_share" />
+
+        <ImageButton
+            android:id="@+id/top_overflow"
+            style="@style/ToolButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/more_actions"
+            android:src="@drawable/ic_more"
+            android:visibility="gone" />
     </LinearLayout>
 
     <View
