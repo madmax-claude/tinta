@@ -219,6 +219,10 @@ class MainActivity : TintaActivity() {
             cloudRow.text = getString(R.string.cloud_connect)
             return
         }
+        if (cloud.needsFolder) {
+            cloudRow.text = getString(R.string.cloud_needs_folder)
+            return
+        }
         val state = when {
             cloud.running -> "subiendo…"
             cloud.lastError != null -> "no se pudo subir (tocá para ver)"
@@ -236,6 +240,18 @@ class MainActivity : TintaActivity() {
                 .setMessage(R.string.cloud_explain)
                 .setPositiveButton(R.string.cloud_choose) { _, _ -> pickBackupFolder.launch(null) }
                 .setNeutralButton(R.string.cloud_restore_other) { _, _ -> pickBackupSource.launch(arrayOf(CloudBackup.MIME, "application/octet-stream", "*/*")) }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+            return
+        }
+        if (cloud.needsFolder) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.cloud_needs_folder_title)
+                .setMessage(R.string.cloud_needs_folder_explain)
+                .setPositiveButton(R.string.cloud_choose) { _, _ -> pickBackupFolder.launch(null) }
+                .setNeutralButton(R.string.cloud_restore_previous) { _, _ ->
+                    cloud.target?.let { uri -> confirm(getString(R.string.cloud_restore_confirm), "Traer") { restoreFrom(uri, resolveNewest = true) } }
+                }
                 .setNegativeButton(R.string.cancel, null)
                 .show()
             return

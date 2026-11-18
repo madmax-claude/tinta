@@ -60,6 +60,14 @@ class CloudBackup private constructor(private val context: Context) {
     /** El último error, o null si la última copia salió bien. */
     val lastError: String? get() = prefs.getString("error", null)
 
+    /**
+     * La copia de antes de esta versión es un solo archivo. No se vuelve a escribir (se vaciaría
+     * si la subida se corta). Queda así hasta que elijan una carpeta: la pantalla lo tiene que
+     * mostrar siempre, no sólo cuando toca el intervalo de un día.
+     */
+    val needsFolder: Boolean
+        get() = BackupSetup.kind(prefs.getString(PREF_DIR, null), prefs.getString("uri", null)) == BackupSetup.Kind.LEGACY_FILE
+
     @Volatile var running = false
         private set
 
@@ -107,7 +115,8 @@ class CloudBackup private constructor(private val context: Context) {
      * leer. Null si todavía no hay un archivo (sólo la carpeta).
      */
     fun latestBackupUri(): Uri? {
-        val fallback = target?.takeIf { !SafBackupDirectory.isFolderGrant(it) }
+        val raw = prefs.getString("uri", null)
+        val fallback = BackupSetup.legacyRestoreUri(raw, target?.let { SafBackupDirectory.isFolderGrant(it) } == true)?.toUri()
         val dir = backupFolder() ?: return fallback
         val best = try {
             BackupRotation.newest(dir, stem(), prefs.getString("uri", null))
@@ -126,6 +135,11 @@ class CloudBackup private constructor(private val context: Context) {
      */
     fun backup(force: Boolean = false, minIntervalMs: Long = MIN_INTERVAL_MS) {
         if (prefs.getString(PREF_DIR, null) == null && target == null) return
+        // Sin esto, durante un día el estado sigue diciendo que la copia está al día y no se sube nada.
+        if (needsFolder) {
+            notifyStatus()
+            return
+        }
         val now = System.currentTimeMillis()
         if (!force && now - lastBackup < minIntervalMs) return
         if (running) return
