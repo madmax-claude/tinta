@@ -444,6 +444,20 @@ class MainActivity : TintaActivity() {
             setTextColor(getColor(R.color.muted))
             setPadding(0, dp(4f).toInt(), dp(56f).toInt(), 0)
         })
+        box.addView(Switch(this).apply {
+            text = getString(R.string.hold_to_erase)
+            textSize = 16f
+            setTextColor(getColor(R.color.ink))
+            isChecked = prefs.holdToErase
+            setPadding(0, dp(16f).toInt(), 0, 0)
+            setOnCheckedChangeListener { _, on -> prefs.holdToErase = on }
+        })
+        box.addView(TextView(this).apply {
+            text = getString(R.string.hold_to_erase_hint)
+            textSize = 13f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(4f).toInt(), dp(56f).toInt(), 0)
+        })
         box.addView(TextView(this).apply {
             text = getString(R.string.font)
             textSize = 16f

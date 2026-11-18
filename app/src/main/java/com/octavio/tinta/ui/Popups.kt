@@ -72,6 +72,8 @@ object Popups {
         canDelete: Boolean,
         holdForShapes: Boolean,
         onHoldForShapes: (Boolean) -> Unit,
+        holdToErase: Boolean,
+        onHoldToErase: (Boolean) -> Unit,
         onChange: (Pen) -> Unit,
         onDelete: () -> Unit,
     ) {
@@ -178,6 +180,12 @@ object Popups {
             topMargin(c, 10f),
         )
         box.addView(hint(c, "Para todos los lápices: al terminar una recta, un círculo, un rectángulo o una raíz, dejá el lápiz quieto un momento y se acomoda; sin levantarlo, podés estirarla."))
+
+        box.addView(
+            switch(c, "Punta quieta para borrar", holdToErase, onHoldToErase),
+            topMargin(c, 10f),
+        )
+        box.addView(hint(c, "Para todos los lápices: con la punta quieta medio segundo, borra hasta que la levantás. Al soltar, sigue el lápiz."))
 
         if (canDelete) {
             box.addView(

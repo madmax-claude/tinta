@@ -1116,6 +1116,11 @@ class EditorActivity :
                 canvas.holdForShapes = it
                 prefs.holdForShapes = it
             },
+            holdToErase = canvas.holdToErase,
+            onHoldToErase = {
+                canvas.holdToErase = it
+                prefs.holdToErase = it
+            },
             onChange = { pen ->
                 pens = pens.toMutableList().also { it[index] = pen }
                 prefs.pens = pens

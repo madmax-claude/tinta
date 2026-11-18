@@ -57,6 +57,8 @@
     <string name="image_unreadable">No se pudo usar esa imagen</string>
     <string name="color_original">El de siempre</string>
     <string name="help_messages_hint">Las etiquetas que aparecen al pasar el lápiz sobre un botón o al mantenerlo apretado, y los avisos que explican cómo usar algo o confirman que salió bien. Los errores se muestran siempre.</string>
+    <string name="hold_to_erase">Punta quieta para borrar</string>
+    <string name="hold_to_erase_hint">Con la punta quieta medio segundo, borra hasta que la levantás. Al soltar, sigue el lápiz. Vale para todas las notas.</string>
     <string name="capture">Captura de Tinta</string>
     <string name="capture_visible">Capturar todo lo que se ve</string>
     <string name="capture_hint">Captura: marcá con el lápiz el recuadro. Al soltar queda copiado en el portapapeles: mantené apretado para pegarlo en una nota, o pegalo en otra app. Tocá el botón otra vez para capturar todo lo que se ve.</string>
