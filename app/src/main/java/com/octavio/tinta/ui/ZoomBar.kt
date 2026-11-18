@@ -58,7 +58,7 @@ class ZoomBar(context: Context) : LinearLayout(context) {
             contentDescription = description
             tip(description)
             setOnClickListener { onClick() }
-        }, LayoutParams(context.dp(44f).toInt(), context.dp(44f).toInt()))
+        }, LayoutParams(context.dp(48f).toInt(), context.dp(48f).toInt()))
     }
 
     /** Arriba a la derecha del panel (en coordenadas del padre), o escondida con null. */
