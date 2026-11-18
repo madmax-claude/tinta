@@ -47,6 +47,17 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // Los hallazgos que ya estaban en el código quedan en lint-baseline.xml y no frenan el
+    // build. Un error o un aviso nuevo, que no esté en esa línea de base, sí falla.
+    lint {
+        baseline = file("lint-baseline.xml")
+        abortOnError = true
+        warningsAsErrors = true
+        htmlReport = true
+        xmlReport = true
+        textReport = true
+    }
 }
 
 // Test opcional contra una nota real: ./gradlew testDebugUnitTest -PjnotesSample=/ruta/a/nota.Jnotes
