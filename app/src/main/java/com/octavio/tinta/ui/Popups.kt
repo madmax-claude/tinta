@@ -72,6 +72,8 @@ object Popups {
         canDelete: Boolean,
         holdForShapes: Boolean,
         onHoldForShapes: (Boolean) -> Unit,
+        holdToErase: Boolean,
+        onHoldToErase: (Boolean) -> Unit,
         onChange: (Pen) -> Unit,
         onDelete: () -> Unit,
         fingerUndo: Boolean,
@@ -181,6 +183,13 @@ object Popups {
         )
         box.addView(hint(c, "Para todos los lápices: al terminar una recta, un círculo, un rectángulo o una raíz, dejá el lápiz quieto un momento y se acomoda; sin levantarlo, podés estirarla."))
 
+        box.addView(
+            switch(c, c.getString(R.string.hold_to_erase), holdToErase, onHoldToErase).apply {
+                minimumHeight = c.dp(48f).toInt()
+            },
+            topMargin(c, 10f),
+        )
+        box.addView(hint(c, c.getString(R.string.hold_to_erase_hint)))
         box.addView(
             switch(c, c.getString(R.string.finger_undo), fingerUndo, onFingerUndo).apply {
                 minimumHeight = c.dp(48f).toInt()

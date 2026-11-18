@@ -58,6 +58,12 @@ android {
         xmlReport = true
         textReport = true
     }
+
+    // NoteStore.readNote escribe en android.util.Log. En la JVM esa clase es un stub que tira:
+    // sin un valor por defecto, el ida y vuelta del .tinta no se puede probar.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 // Test opcional contra una nota real: ./gradlew testDebugUnitTest -PjnotesSample=/ruta/a/nota.Jnotes

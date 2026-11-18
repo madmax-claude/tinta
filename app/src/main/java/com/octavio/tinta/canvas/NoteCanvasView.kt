@@ -90,7 +90,7 @@ import kotlin.math.min
  * entre el papel y la capa de tinta. La pluma, al terminar, queda primero como trazo fresco y,
  * cuando descansa, en su capa; el resaltador pasa directo a las baldosas.
  *
- * Con el lápiz quieto: al empezar, después de un segundo pasa a borrar; al final de un trazo, el
+ * Con el lápiz quieto: al empezar, después de medio segundo pasa a borrar; al final de un trazo, el
  * trazo se cambia por la figura que se quiso hacer ([Shapes]), que sigue al lápiz hasta levantarlo.
  *
  * Con el lazo se rodea lo que se quiere elegir; lo elegido se mueve arrastrándolo y se agranda con
@@ -255,7 +255,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** El borrador saca sólo la parte del trazo que toca, en vez del trazo entero. */
     var partialErase = false
 
-    /** Mantener el lápiz quieto al apoyarlo pasa a borrar. */
+    /** Mantener la punta quieta medio segundo (500 ms) pasa a borrar hasta soltar. */
     var holdToErase = true
 
     /** Mantener el lápiz quieto al final de un trazo lo cambia por la figura más parecida. */
