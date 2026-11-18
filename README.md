@@ -31,6 +31,22 @@ Hace falta el JDK 21 (con [mise](https://mise.jdx.dev): `mise install`) y el SDK
 ./gradlew testDebugUnitTest  # pruebas
 ```
 
+## CI
+
+[![CI](https://github.com/madmax-claude/tinta/actions/workflows/ci.yml/badge.svg)](https://github.com/madmax-claude/tinta/actions/workflows/ci.yml)
+
+En cada push y cada pull request a `main`, GitHub Actions corre las pruebas de unidad y el lint:
+
+```
+./gradlew testDebugUnitTest lintDebug
+```
+
+El job usa JDK 21 (Temurin) y el SDK de Android (plataforma 37 y build-tools 36). Quien no tenga el JDK ni el SDK puede validar el cambio con el chequeo de la pull request. Los reportes de pruebas y de lint, y el APK de depuración, quedan como artefactos de esa corrida.
+
+`JnotesRealFileTest` se saltea si no se pasa `-PjnotesSample` o `-PjnotesDir`; en CI no hay notas de ejemplo y eso es lo esperado.
+
+Los hallazgos de lint que ya estaban en el código están en [`app/lint-baseline.xml`](app/lint-baseline.xml) y no frenan el build. Un error o un aviso nuevo sí. Para regenerar la línea de base: `./gradlew updateLintBaseline`.
+
 ## Pasar todas las notas de Jnotes
 
 Jnotes guarda una copia de cada nota en
