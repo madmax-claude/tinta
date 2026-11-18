@@ -3,6 +3,7 @@ package com.octavio.tinta.ui
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.RectF
+import android.graphics.drawable.InsetDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -137,7 +138,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
             b.contentDescription = description
             b.tip(description)
             b.alpha = 0.7f
-            header.addView(b, LinearLayout.LayoutParams(context.dp(30f).toInt(), context.dp(30f).toInt()))
+            header.addView(b, LinearLayout.LayoutParams(context.dp(48f).toInt(), context.dp(48f).toInt()))
         }
         panel.addView(header)
         panel.addView(scroller, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
@@ -169,6 +170,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
         tabIcon.scaleType = ImageView.ScaleType.CENTER
         tabIcon.contentDescription = "Mostrar las herramientas"
         tabIcon.setOnClickListener { setState(right, collapsed = false) }
+        tab.setOnClickListener { setState(right, collapsed = false) }
         tab.addView(tabIcon, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         tab.elevation = context.dp(6f)
         tab.contentDescription = "Mostrar las herramientas"
@@ -186,7 +188,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
             }
         }
         addView(panel, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL))
-        addView(tab, LayoutParams(context.dp(26f).toInt(), context.dp(64f).toInt(), Gravity.CENTER_VERTICAL))
+        addView(tab, LayoutParams(context.dp(48f).toInt(), context.dp(64f).toInt(), Gravity.CENTER_VERTICAL))
         apply()
     }
 
@@ -218,7 +220,8 @@ class ToolDock(context: Context) : FrameLayout(context) {
         arrange()
     }
 
-    private fun toolParams() = LinearLayout.LayoutParams(context.dp(64f).toInt(), context.dp(52f).toInt()).apply {
+    /** 96 dp: el mismo ancho que los dos botones de 48 dp del encabezado. */
+    private fun toolParams() = LinearLayout.LayoutParams(context.dp(96f).toInt(), context.dp(52f).toInt()).apply {
         topMargin = context.dp(2f).toInt()
     }
 
@@ -289,6 +292,12 @@ class ToolDock(context: Context) : FrameLayout(context) {
         val bg = if (right) R.drawable.bg_dock_right else R.drawable.bg_dock_left
         panel.background = context.getDrawable(bg)
         tab.background = context.getDrawable(bg)
+        // El dibujo de la pestaña sigue de 26 dp, pegado al borde; el resto es área táctil.
+        val extra = (context.dp(48f) - context.dp(26f)).toInt().coerceAtLeast(0)
+        val tint = tab.backgroundTintList
+        tab.background = InsetDrawable(tab.background, if (right) extra else 0, 0, if (right) 0 else extra, 0)
+        if (tint != null) tab.backgroundTintList = tint
+        tab.setPadding(if (right) extra else 0, 0, if (right) 0 else extra, 0)
         // La flecha apunta hacia la hoja. La forma queda plana contra el borde y redonda hacia adentro.
         hide.rotation = if (right) 0f else 180f
         tab.rotation = 0f
@@ -376,7 +385,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
 
     private fun toolWidth(): Int {
         val w = buttons.values.firstOrNull()?.layoutParams?.width ?: 0
-        return if (w > 0) w else context.dp(64f).toInt()
+        return if (w > 0) w else context.dp(96f).toInt()
     }
 
     private fun placeY() {
@@ -430,14 +439,18 @@ class ToolDock(context: Context) : FrameLayout(context) {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (!dragging && e.actionMasked == MotionEvent.ACTION_UP) {
+                        var clicked = false
                         if (handle is ViewGroup) {
                             for (i in 0 until handle.childCount) {
                                 val c = handle.getChildAt(i)
-                                if (e.x >= c.left && e.x < c.right && e.y >= c.top && e.y < c.bottom) c.performClick()
+                                if (e.x >= c.left && e.x < c.right && e.y >= c.top && e.y < c.bottom) {
+                                    c.performClick()
+                                    clicked = true
+                                }
                             }
-                        } else {
-                            handle.performClick()
                         }
+                        // El margen táctil de la pestaña (fuera del dibujo) también la abre.
+                        if (!clicked) handle.performClick()
                     } else if (dragging) {
                         callbacks?.onDockBias(bias)
                     }
