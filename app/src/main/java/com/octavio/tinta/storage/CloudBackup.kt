@@ -1,12 +1,15 @@
 package com.octavio.tinta.storage
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import android.util.Log
 import androidx.core.content.edit
+import androidx.core.net.toUri
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.DataInputStream
@@ -21,8 +24,13 @@ import java.util.zip.ZipOutputStream
 
 /**
  * Copia de todas las notas en la nube, a través del selector de archivos de Android: se elige
- * un archivo en Google Drive (o en cualquier otro lugar) y la app lo reescribe cuando hay cambios.
- * La app de Drive se encarga de subirlo. No hace falta ninguna cuenta ni clave en la app.
+ * una carpeta en Google Drive (o en cualquier otro lugar) y la app escribe ahí cuando hay cambios.
+ * La app de Drive se encarga de subirla. No hace falta ninguna cuenta ni clave en la app.
+ *
+ * Cada copia es un archivo nuevo. El anterior no se abre para escribir: en Drive abrir un
+ * documento lo trunca antes de que entren los bytes, y si la app, el disco o la subida se cortan
+ * esa era la única copia de afuera. Recién cuando la nueva se lee entera y coincide se la recuerda
+ * y se borra la vieja. [latestBackupUri] elige la válida con la fecha más nueva.
  *
  * La copia es un .zip con `notes/` (las notas, sus miniaturas, sus medios y `carpetas.json`),
  * `stickers/` y `tinta-copia.json` (versión y fecha). Restaurar trae las notas que faltan y las
@@ -55,33 +63,60 @@ class CloudBackup private constructor(private val context: Context) {
     @Volatile var running = false
         private set
 
-    /** Empieza a usar este archivo (recién elegido con el selector) y hace la primera copia. */
+    /** Empieza a usar esta carpeta (recién elegida con el selector) y hace la primera copia. */
     fun connect(uri: Uri, name: String?) {
-        // Para poder volver a escribirlo después de reiniciar la tablet.
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(
-                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        }
+        // Para poder volver a escribir después de reiniciar la tablet.
+        val previous = listOfNotNull(prefs.getString("uri", null), prefs.getString(PREF_DIR, null)).distinct()
+        val folder = DocumentsContract.isTreeUri(uri)
+        runCatching { takePermission(uri) }
         prefs.edit {
+            if (folder) putString(PREF_DIR, uri.toString()) else remove(PREF_DIR)
             putString("uri", uri.toString())
-            putString("name", name)
+            putString("name", if (folder) folderLabel(uri) ?: name else name)
             putLong("last", 0L)
             remove("error")
+        }
+        previous.filter { it != uri.toString() }.forEach { raw ->
+            runCatching {
+                context.contentResolver.releasePersistableUriPermission(
+                    raw.toUri(),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
         }
         backup(force = true)
     }
 
     fun disconnect() {
-        target?.let { uri ->
-            runCatching {
-                context.contentResolver.releasePersistableUriPermission(
-                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                )
+        listOfNotNull(prefs.getString("uri", null), prefs.getString(PREF_DIR, null))
+            .distinct()
+            .forEach { raw ->
+                runCatching {
+                    context.contentResolver.releasePersistableUriPermission(
+                        raw.toUri(),
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                }
             }
-        }
         prefs.edit { clear() }
         notifyStatus()
+    }
+
+    /**
+     * El archivo de la copia válida más nueva, o el que ya estaba anotado si la carpeta no se puede
+     * leer. Null si todavía no hay un archivo (sólo la carpeta).
+     */
+    fun latestBackupUri(): Uri? {
+        val fallback = target?.takeIf { !SafBackupDirectory.isFolderGrant(it) }
+        val dir = backupFolder() ?: return fallback
+        val best = try {
+            BackupRotation.newest(dir, stem(), prefs.getString("uri", null))
+        } catch (e: Exception) {
+            Log.w(TAG, "buscar la copia más nueva", e)
+            return fallback
+        } ?: return fallback
+        if (best.key != prefs.getString("uri", null)) pointAt(best)
+        return best.key.toUri()
     }
 
     /**
@@ -90,7 +125,7 @@ class CloudBackup private constructor(private val context: Context) {
      * [NoteStore], después de los guardados pendientes, así la copia nunca tiene una nota a medias.
      */
     fun backup(force: Boolean = false, minIntervalMs: Long = MIN_INTERVAL_MS) {
-        val uri = target ?: return
+        if (prefs.getString(PREF_DIR, null) == null && target == null) return
         val now = System.currentTimeMillis()
         if (!force && now - lastBackup < minIntervalMs) return
         if (running) return
@@ -99,6 +134,9 @@ class CloudBackup private constructor(private val context: Context) {
         worker.execute {
             val zip = File(context.cacheDir, "copia-tinta.zip")
             val result = runCatching {
+                // Sin carpeta no hay dónde crear el archivo nuevo: reescribir el único documento
+                // lo truncaría antes de terminar.
+                val dir = backupFolder() ?: error(NEED_FOLDER)
                 val store = NoteStore.get(context)
                 val changed = store.io.submit<Boolean> {
                     val latest = latestChange()
@@ -107,9 +145,12 @@ class CloudBackup private constructor(private val context: Context) {
                     true
                 }.get()
                 if (changed) {
-                    // Primero en el disco de la tablet y después de una vez al archivo de Drive.
-                    val out = openForWrite(uri) ?: error("no se pudo abrir el archivo de la copia")
-                    out.use { o -> zip.inputStream().use { it.copyTo(o, 1 shl 16) } }
+                    // Primero el zip completo en la tablet. Recién después un documento nuevo;
+                    // la copia anterior no se abre para escribir.
+                    BackupRotation.publish(dir, zip, stem()) { pointAt(it) }
+                } else {
+                    // Nada nuevo para subir: igual se busca si quedó una copia más nueva a medias.
+                    reconcile(dir)
                 }
                 changed
             }
@@ -128,10 +169,50 @@ class CloudBackup private constructor(private val context: Context) {
         }
     }
 
-    private fun openForWrite(uri: Uri): OutputStream? {
-        val r = context.contentResolver
-        // "wt" vacía el archivo antes de escribir; hay proveedores que sólo aceptan "w".
-        return runCatching { r.openOutputStream(uri, "wt") }.getOrNull() ?: r.openOutputStream(uri, "w")
+    private fun backupFolder(): SafBackupDirectory? {
+        val raw = prefs.getString(PREF_DIR, null) ?: return null
+        val uri = raw.toUri()
+        if (!DocumentsContract.isTreeUri(uri)) return null
+        return SafBackupDirectory(context.contentResolver, uri)
+    }
+
+    private fun reconcile(dir: BackupDirectory) {
+        val best = BackupRotation.newest(dir, stem(), prefs.getString("uri", null)) ?: return
+        if (best.key != prefs.getString("uri", null)) pointAt(best)
+    }
+
+    /** Anota el archivo vigente antes de borrar el anterior, y lo deja en disco ya. */
+    @SuppressLint("ApplySharedPref")
+    private fun pointAt(doc: BackupDocument) {
+        prefs.edit(commit = true) {
+            putString("uri", doc.key)
+            putString("name", doc.name)
+        }
+    }
+
+    private fun stem() = FILE_NAME.removeSuffix(".zip")
+
+    private fun takePermission(uri: Uri) {
+        context.contentResolver.takePersistableUriPermission(
+            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+        )
+    }
+
+    private fun folderLabel(uri: Uri): String? {
+        val doc = try {
+            DocumentsContract.buildDocumentUriUsingTree(uri, SafBackupDirectory.folderDocumentId(uri))
+        } catch (e: Exception) {
+            return null
+        }
+        return context.contentResolver.query(
+            doc,
+            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
+        }
     }
 
     /** La fecha del archivo más nuevo de notas y stickers. */
@@ -147,7 +228,7 @@ class CloudBackup private constructor(private val context: Context) {
     fun write(out: OutputStream) {
         ZipOutputStream(out).use { zip ->
             zip.setLevel(1) // las notas ya van comprimidas: alcanza con lo rápido
-            zip.putNextEntry(ZipEntry(MANIFEST))
+            zip.putNextEntry(ZipEntry(BackupRotation.MANIFEST))
             zip.write(
                 JSONObject().put("version", 1).put("fecha", System.currentTimeMillis()).put("app", "Tinta").toString(2)
                     .toByteArray(Charsets.UTF_8),
@@ -181,7 +262,7 @@ class CloudBackup private constructor(private val context: Context) {
         }
         try {
             unzip(input, stage)
-            if (!File(stage, MANIFEST).exists()) error("ese archivo no es una copia de Tinta")
+            if (!File(stage, BackupRotation.MANIFEST).exists()) error("ese archivo no es una copia de Tinta")
             val r = store.io.submit<Restored> { merge(stage, store, isOpen) }.get()
             stage.deleteRecursively()
             var redrawn = 0
@@ -206,7 +287,7 @@ class CloudBackup private constructor(private val context: Context) {
                 val e = zip.nextEntry ?: break
                 if (e.isDirectory) continue
                 val name = e.name
-                if (name != MANIFEST && !name.startsWith("$NOTES/") && !name.startsWith("$STICKERS/")) continue
+                if (name != BackupRotation.MANIFEST && !name.startsWith("$NOTES/") && !name.startsWith("$STICKERS/")) continue
                 val f = File(stage, name)
                 // Nada fuera de la carpeta de trabajo (un nombre con "../").
                 if (!f.canonicalPath.startsWith(root)) continue
@@ -282,8 +363,15 @@ class CloudBackup private constructor(private val context: Context) {
         private const val TAG = "Tinta"
         const val MIME = "application/zip"
         const val FILE_NAME = "Tinta - copia de las notas.zip"
-        private const val MANIFEST = "tinta-copia.json"
+        private const val PREF_DIR = "dir"
         private const val NOTES = "notes"
+
+        /**
+         * Un solo documento no se puede reemplazar sin truncarlo. La persona tiene que elegir la
+         * carpeta; el archivo que ya está no se toca.
+         */
+        private const val NEED_FOLDER =
+            "la copia está en un solo archivo y reescribirla la vacía antes de terminar: si se corta, se pierde. Elegí la carpeta de Drive; el archivo que ya está no se toca."
         private const val STICKERS = "stickers"
 
         /**

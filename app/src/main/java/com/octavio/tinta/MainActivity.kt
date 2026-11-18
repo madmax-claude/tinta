@@ -116,9 +116,9 @@ class MainActivity : TintaActivity() {
     private lateinit var cloud: CloudBackup
     private lateinit var cloudRow: TextView
 
-    /** Elegir el archivo de la copia en Drive (o donde sea). */
-    private val pickBackupTarget = registerForActivityResult(ActivityResultContracts.CreateDocument(CloudBackup.MIME)) { uri ->
-        if (uri != null) cloud.connect(uri, displayName(uri))
+    /** Elegir la carpeta de la copia en Drive (o donde sea). */
+    private val pickBackupFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) cloud.connect(uri, null)
     }
 
     /** Elegir una copia para traer sus notas. */
@@ -234,7 +234,7 @@ class MainActivity : TintaActivity() {
             AlertDialog.Builder(this)
                 .setTitle(R.string.cloud_connect)
                 .setMessage(R.string.cloud_explain)
-                .setPositiveButton(R.string.cloud_choose) { _, _ -> pickBackupTarget.launch(CloudBackup.FILE_NAME) }
+                .setPositiveButton(R.string.cloud_choose) { _, _ -> pickBackupFolder.launch(null) }
                 .setNeutralButton(R.string.cloud_restore_other) { _, _ -> pickBackupSource.launch(arrayOf(CloudBackup.MIME, "application/octet-stream", "*/*")) }
                 .setNegativeButton(R.string.cancel, null)
                 .show()
@@ -250,15 +250,15 @@ class MainActivity : TintaActivity() {
                 true
             }
             menu.add("Traer las notas de la copia…").setOnMenuItemClickListener {
-                cloud.target?.let { uri -> confirm(getString(R.string.cloud_restore_confirm), "Traer") { restoreFrom(uri) } }
+                cloud.target?.let { uri -> confirm(getString(R.string.cloud_restore_confirm), "Traer") { restoreFrom(uri, resolveNewest = true) } }
                 true
             }
             menu.add(getString(R.string.cloud_restore_other)).setOnMenuItemClickListener {
                 pickBackupSource.launch(arrayOf(CloudBackup.MIME, "application/octet-stream", "*/*"))
                 true
             }
-            menu.add("Guardar la copia en otro archivo…").setOnMenuItemClickListener {
-                pickBackupTarget.launch(CloudBackup.FILE_NAME)
+            menu.add("Guardar la copia en otra carpeta…").setOnMenuItemClickListener {
+                pickBackupFolder.launch(null)
                 true
             }
             menu.add("Dejar de copiar en Drive").setOnMenuItemClickListener {
@@ -269,11 +269,12 @@ class MainActivity : TintaActivity() {
         }
     }
 
-    private fun restoreFrom(uri: Uri) {
+    private fun restoreFrom(uri: Uri, resolveNewest: Boolean = false) {
         hint("Trayendo las notas de la copia…")
         Thread({
             val result = runCatching {
-                contentResolver.openInputStream(uri)?.use { input ->
+                val source = if (resolveNewest) cloud.latestBackupUri() ?: error("todavía no hay una copia") else uri
+                contentResolver.openInputStream(source)?.use { input ->
                     cloud.restore(input, EditorActivity::isOpen) { text -> runOnUiThread { cloudRow.text = text } }
                 } ?: error("no se pudo leer el archivo")
             }
