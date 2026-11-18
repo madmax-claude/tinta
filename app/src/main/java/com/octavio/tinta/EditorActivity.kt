@@ -554,6 +554,7 @@ class EditorActivity :
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (isPenButtonKey(keyCode, event)) {
+            // Soltar no alterna: el clic ya contó al bajar. Se consume la tecla para que no haga otra cosa.
             canvas.penButton(down = false, event.eventTime)
             return true
         }
