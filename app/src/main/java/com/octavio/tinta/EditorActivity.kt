@@ -64,6 +64,7 @@ import com.octavio.tinta.model.Transform
 import com.octavio.tinta.model.Viewport
 import com.octavio.tinta.model.Widget
 import com.octavio.tinta.storage.CloudBackup
+import com.octavio.tinta.storage.EditorSave
 import com.octavio.tinta.storage.HandText
 import com.octavio.tinta.storage.ImageImport
 import com.octavio.tinta.storage.Imports
@@ -96,6 +97,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.Future
 import kotlin.math.min
 
 /**
@@ -178,17 +180,21 @@ class EditorActivity :
     /** A qué volver cuando se apaga el láser. */
     private var previousMode = Mode.PEN
 
-    /** Hay trazos o datos sin guardar. */
-    private var dirty = false
+    /** Qué falta escribir. No se baja al encolar: recién cuando el archivo quedó en disco. */
+    private val saves = EditorSave()
 
-    /** Sólo cambió la vista; se guarda al salir. */
-    private var viewportChanged = false
-
-    /** La miniatura no muestra los últimos cambios; se rehace al salir. */
-    private var thumbnailStale = false
+    /** Escritura en curso, para esperarla al pausar o al salir. */
+    private var saving: Saving? = null
 
     private val handler = Handler(Looper.getMainLooper())
-    private val autosave = Runnable { save(withThumbnail = false) }
+
+    /** El próximo autosave también rehace la miniatura: es el reintento de un guardado que la pedía. */
+    private var autosaveThumbnail = false
+    private val autosave = Runnable {
+        val thumb = autosaveThumbnail
+        autosaveThumbnail = false
+        save(withThumbnail = thumb)
+    }
     private val selectionRect = RectF()
 
     private val pickMedia = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -261,7 +267,7 @@ class EditorActivity :
         recorder.cancel()
         val n = note
         val h = history
-        if (n != null && h != null && isChangingConfigurations) NoteCache.put(NoteCache.Entry(n, h, dirty, thumbnailStale), always = true)
+        if (n != null && h != null && isChangingConfigurations) NoteCache.put(NoteCache.Entry(n, h, saves.rememberDirty, saves.thumbnailStale), always = true)
         // Si ya hay otra pantalla en esta ventana, la nota que muestra es suya.
         if (Tabs.windows[slot] === this) {
             Tabs.setActive(slot, null)
@@ -317,7 +323,7 @@ class EditorActivity :
         handler.removeCallbacks(autosave)
         if (recorder.recording) recorder.stop()
         canvas.finishPending() // lo que se estaba moviendo vuelve a la nota antes de guardarla
-        save(withThumbnail = true)
+        save(withThumbnail = true, wait = true)
         // Después del guardado (va en el mismo hilo de disco): la copia en Drive, si hay cambios.
         CloudBackup.get(this).backup()
     }
@@ -337,9 +343,10 @@ class EditorActivity :
         Tabs.setActive(slot, id)
         refreshTabs()
         NoteCache.take(id)?.let { e ->
-            dirty = e.dirty
-            thumbnailStale = e.thumbnailStale
+            saves.shown(e.dirty, e.thumbnailStale)
             show(e.note, e.history)
+            // Un guardado que falló al salir deja la nota sucia: se reintenta al volver a verla.
+            if (saves.rememberDirty || saves.thumbnailStale) scheduleAutosave(withThumbnail = saves.thumbnailStale)
             return
         }
         loadingId = id
@@ -352,8 +359,7 @@ class EditorActivity :
                 loadingId = null
                 loading.visibility = View.GONE
                 result.onSuccess {
-                    dirty = false
-                    thumbnailStale = false
+                    saves.shown(dirty = false, thumbnailStale = false)
                     show(it, History())
                 }.onFailure {
                     toast("No se pudo abrir la nota: ${it.message}", long = true)
@@ -378,8 +384,11 @@ class EditorActivity :
         canvas.finishPending()
         canvas.clearSelection()
         handler.removeCallbacks(autosave)
-        save(withThumbnail = true)
-        NoteCache.put(NoteCache.Entry(n, history ?: History(), dirty = false, thumbnailStale = false), always = false)
+        save(withThumbnail = true, wait = true)
+        // Si la escritura no terminó (o falló), la nota queda sucia en memoria. Una nota grande
+        // también: si no, la caché la tira y el trazo no se reintenta.
+        val pending = saves.rememberDirty || saves.thumbnailStale
+        NoteCache.put(NoteCache.Entry(n, history ?: History(), saves.rememberDirty, saves.thumbnailStale), always = pending)
         meshes?.cancel()
         meshes = null
         Tabs.setActive(slot, null)
@@ -614,7 +623,7 @@ class EditorActivity :
     }
 
     override fun onViewportChanged() {
-        viewportChanged = true
+        saves.viewportEdited()
         if (note?.pages?.paged == true) pageStrip.setCurrent(canvas.currentPage())
         if (meshes == null && canvas.vistaZoomNeedsMeshes()) ensureMeshes()
     }
@@ -695,12 +704,10 @@ class EditorActivity :
         val n = note ?: return
         n.modified = System.currentTimeMillis()
         canvas.armVista(store.vista(n.id), n.modified, n.strokes.size, canvas.dark)
-        dirty = true
-        thumbnailStale = true
+        saves.noteEdited()
         if (redraw) canvas.refresh()
         updateUndo()
-        handler.removeCallbacks(autosave)
-        handler.postDelayed(autosave, AUTOSAVE_MS)
+        scheduleAutosave(withThumbnail = false)
         handler.removeCallbacks(thumbsUpdate)
         handler.postDelayed(thumbsUpdate, THUMBS_DELAY_MS)
     }
@@ -868,30 +875,77 @@ class EditorActivity :
         prefs.pageStripCollapsed = collapsed
     }
 
-    private fun save(withThumbnail: Boolean) {
-        val n = note ?: return
-        if (canvas.busy) {
+    private fun scheduleAutosave(withThumbnail: Boolean) {
+        autosaveThumbnail = withThumbnail
+        handler.removeCallbacks(autosave)
+        handler.postDelayed(autosave, AUTOSAVE_MS)
+    }
+
+    /**
+     * Encola la nota en el hilo de disco. Con `wait`, espera a que el sync y el rename terminen
+     * (con tope [EditorSave.WAIT_MS]) para que al pausar o al salir el proceso no muera con el
+     * archivo a medias. Si la escritura falla, la nota sigue sucia y se reintenta.
+     */
+    private fun save(withThumbnail: Boolean, wait: Boolean = false) {
+        val n = note
+        if (n != null && canvas.busy) {
             // Lo elegido está fuera de la nota mientras se mueve: se guarda cuando vuelva.
-            handler.removeCallbacks(autosave)
-            handler.postDelayed(autosave, AUTOSAVE_MS)
-            return
+            scheduleAutosave(withThumbnail = false)
+        } else if (n != null) {
+            val attempt = saves.begin(withThumbnail, thumbnailMissing = !store.thumbnail(n.id).exists())
+            if (attempt != null) {
+                n.viewport = Viewport(
+                    canvas.camera.toWorldX(0f), canvas.camera.toWorldY(0f), canvas.camera.zoom,
+                    canvas.width.toFloat(), canvas.height.toFloat(),
+                )
+                val future = store.save(n, attempt.withThumbnail)
+                val job = Saving(attempt, n.id, future)
+                saving = job
+                future.whenComplete { _, error ->
+                    if (Looper.myLooper() == Looper.getMainLooper()) settle(job, error)
+                    else handler.post { settle(job, error) }
+                }
+                // Al salir de la nota, su letra se pone al día para la búsqueda (sólo lo que cambió).
+                if (withThumbnail && n.modified != searchLinesAt) HandText.get(this).update(n.id, n.modified, n.strokes.toList(), n.texts.toList())
+                // Escribiendo mucho rato seguido, de vez en cuando también se sube la copia.
+                CloudBackup.get(this).backup(minIntervalMs = CloudBackup.WHILE_WRITING_MS)
+            }
         }
-        val thumbnail = withThumbnail && (thumbnailStale || !store.thumbnail(n.id).exists())
-        if (!dirty && !viewportChanged && !thumbnail) return
-        n.viewport = Viewport(
-            canvas.camera.toWorldX(0f), canvas.camera.toWorldY(0f), canvas.camera.zoom,
-            canvas.width.toFloat(), canvas.height.toFloat(),
-        )
-        dirty = false
-        viewportChanged = false
-        if (thumbnail) thumbnailStale = false
-        store.save(n, thumbnail) { e ->
-            runOnUiThread { toast("No se pudo guardar: ${e.message}", long = true) }
+        if (wait) awaitSaving()
+    }
+
+    /** Espera la escritura en curso. Si se vence el tope, la nota sigue sucia y el hilo de disco sigue. */
+    private fun awaitSaving() {
+        val job = saving ?: return
+        val outcome = EditorSave.await(job.future) ?: return
+        if (outcome.timedOut) return
+        settle(job, outcome.error)
+    }
+
+    /** Corre en el hilo de la pantalla, una sola vez por escritura. */
+    private fun settle(job: Saving, error: Throwable?) {
+        if (!job.claim()) return
+        if (note?.id != job.noteId) return
+        if (error != null) {
+            if (saves.failed(job.attempt) && !isDestroyed) {
+                toast("No se pudo guardar: ${error.message}", long = true)
+                scheduleAutosave(withThumbnail = job.attempt.withThumbnail)
+            }
+        } else {
+            saves.succeed(job.attempt)
         }
-        // Al salir de la nota, su letra se pone al día para la búsqueda (sólo lo que cambió).
-        if (withThumbnail && n.modified != searchLinesAt) HandText.get(this).update(n.id, n.modified, n.strokes.toList(), n.texts.toList())
-        // Escribiendo mucho rato seguido, de vez en cuando también se sube la copia.
-        CloudBackup.get(this).backup(minIntervalMs = CloudBackup.WHILE_WRITING_MS)
+    }
+
+    private class Saving(
+        val attempt: EditorSave.Attempt,
+        val noteId: String,
+        val future: Future<*>,
+    ) {
+        private var settled = false
+        fun claim(): Boolean = if (settled) false else {
+            settled = true
+            true
+        }
     }
 
     private fun updateUndo() {
