@@ -74,6 +74,8 @@ object Popups {
         onHoldForShapes: (Boolean) -> Unit,
         onChange: (Pen) -> Unit,
         onDelete: () -> Unit,
+        fingerUndo: Boolean,
+        onFingerUndo: (Boolean) -> Unit,
     ) {
         val c: Context = activity
         var pen = start
@@ -178,6 +180,14 @@ object Popups {
             topMargin(c, 10f),
         )
         box.addView(hint(c, "Para todos los lápices: al terminar una recta, un círculo, un rectángulo o una raíz, dejá el lápiz quieto un momento y se acomoda; sin levantarlo, podés estirarla."))
+
+        box.addView(
+            switch(c, c.getString(R.string.finger_undo), fingerUndo, onFingerUndo).apply {
+                minimumHeight = c.dp(48f).toInt()
+            },
+            topMargin(c, 10f),
+        )
+        box.addView(hint(c, c.getString(R.string.finger_undo_hint)))
 
         if (canDelete) {
             box.addView(

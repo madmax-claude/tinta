@@ -36,6 +36,7 @@ import androidx.ink.strokes.StrokeInput
 import androidx.input.motionprediction.MotionEventPredictor
 import com.octavio.tinta.Diag
 import com.octavio.tinta.R
+import com.octavio.tinta.input.FingerUndoGesture
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
 import com.octavio.tinta.storage.VistaCache
@@ -112,6 +113,12 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
         /** Un toque del botón lateral: al borrador, o de vuelta al primer lápiz. */
         fun onStylusButtonClick() = Unit
+
+        /** Toque corto con dos dedos, sin moverlos: deshacer. */
+        fun onFingerUndo() = Unit
+
+        /** Toque corto con tres dedos, sin moverlos: rehacer. */
+        fun onFingerRedo() = Unit
 
         /** Tocaron un audio o un video: hay que reproducirlo. */
         fun onMediaTap(media: Media) = Unit
@@ -249,6 +256,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** Mantener el lápiz quieto al final de un trazo lo cambia por la figura más parecida. */
     var holdForShapes = true
 
+    /** Toque con dos dedos deshace; con tres, rehace. */
+    var fingerUndo = true
+
     var lassoFilter = LassoFilter()
 
 
@@ -291,6 +301,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     /** Dedos apoyados que mueven la vista, con su última posición en pantalla. */
     private val fingers = LinkedHashMap<Int, PointF>()
+
+    /** Toque quieto de dos o tres dedos. El margen es el de un toque, así no pelea con el zoom. */
+    private val fingerUndoGesture = FingerUndoGesture(TAP_SLOP * density, TAP_MS)
 
     /** Última vez que se vio el lápiz apoyado o cerca de la pantalla, para rechazar la palma. */
     private var lastPenSeen = 0L
@@ -740,6 +753,11 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         return super.onGenericMotionEvent(e)
     }
 
+    /** Anota los dedos que ya están en [fingers]; uno puede haber entrado un instante antes. */
+    private fun rememberFingers(time: Long) {
+        for ((id, p) in fingers) fingerUndoGesture.down(id, p.x, p.y, time)
+    }
+
     private fun pointerDown(e: MotionEvent, i: Int) {
         if (framePointer != NONE) return
         val id = e.getPointerId(i)
@@ -798,12 +816,14 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                     tapPointer = NONE
                     if (fingers.size == 2 && pages.paged) beginFlip()
                 }
+                rememberFingers(e.eventTime)
             }
             return
         }
         if (penPointer != NONE) return
         removeCallbacks(merge)
         fingers.clear() // el lápiz manda: corta cualquier desplazamiento en curso
+        fingerUndoGesture.cancel()
         flip = null
         suppressPan = false
         cancelFlipAnim()
@@ -973,9 +993,16 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
                 finishFlip()
                 if (locked && fingers.isNotEmpty()) suppressPan = true
             }
+            val gesture = fingerUndoGesture.up(id, e.eventTime)
             if (fingers.isEmpty()) {
                 suppressPan = false
                 dry.invalidate()
+                if (fingerUndo && gesture != null) {
+                    when (gesture) {
+                        FingerUndoGesture.Action.UNDO -> listener?.onFingerUndo()
+                        FingerUndoGesture.Action.REDO -> listener?.onFingerRedo()
+                    }
+                }
             }
             return
         }
@@ -1084,6 +1111,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penPointer = NONE
         penStroke = null
         fingers.clear()
+        fingerUndoGesture.cancel()
         flip = null
         suppressPan = false
         cancelFlipAnim()
@@ -1105,6 +1133,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             oy += p.y
             nx += e.getX(i)
             ny += e.getY(i)
+            fingerUndoGesture.move(id, e.getX(i), e.getY(i))
             n++
         }
         if (n == 0) return
