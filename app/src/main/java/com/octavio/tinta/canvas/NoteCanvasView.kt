@@ -36,6 +36,7 @@ import androidx.ink.strokes.StrokeInput
 import androidx.input.motionprediction.MotionEventPredictor
 import com.octavio.tinta.Diag
 import com.octavio.tinta.R
+import com.octavio.tinta.input.FingerAdmit
 import com.octavio.tinta.model.Appearance
 import com.octavio.tinta.model.Background
 import com.octavio.tinta.storage.VistaCache
@@ -294,6 +295,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
 
     /** Última vez que se vio el lápiz apoyado o cerca de la pantalla, para rechazar la palma. */
     private var lastPenSeen = 0L
+
+    /** Dónde se vio esa punta, para no tomar como dedo la mano pegada al lápiz. */
+    private var palmTipX = Float.NaN
+    private var palmTipY = Float.NaN
+
+    /** Un dedo solo, con el lápiz cerca, espera acá hasta que llegue otro. */
+    private val fingerAdmit = FingerAdmit()
 
     /** Dónde está el lápiz sin apoyar, o null si no está cerca. */
     private var hover: PointF? = null
@@ -627,6 +635,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         val type = e.getToolType(0)
         if (type == MotionEvent.TOOL_TYPE_STYLUS || type == MotionEvent.TOOL_TYPE_ERASER) {
             lastPenSeen = e.eventTime
+            // Sólo la posición de la punta: el cursor del hover no se toca acá.
+            palmTipX = e.x
+            palmTipY = e.y
         }
         if (isPen(e, 0)) {
             val near = e.actionMasked != MotionEvent.ACTION_HOVER_EXIT
@@ -740,6 +751,41 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         return super.onGenericMotionEvent(e)
     }
 
+    /**
+     * ¿Este dedo entra al gesto? Si había uno esperando (el lápiz está cerca y era el único),
+     * lo agrega a [fingers] antes de aceptar a este.
+     */
+    private fun admitFinger(e: MotionEvent, i: Int): Boolean {
+        val id = e.getPointerId(i)
+        val partner = fingerAdmit.waitingId
+        val partnerDown = partner != FingerAdmit.NONE && e.findPointerIndex(partner) >= 0
+        val near = stylusNear(e.eventTime)
+        val decision = fingerAdmit.onDown(
+            id = id,
+            palm = FingerAdmit.isPalm(e.getTouchMajor(i), density, distToPalmTip(e, i), near),
+            penNear = near,
+            partnerDown = partnerDown,
+            fingersEmpty = fingers.isEmpty(),
+        )
+        if (decision.promote && partner != FingerAdmit.NONE) {
+            val w = e.findPointerIndex(partner)
+            if (w >= 0) fingers[partner] = PointF(e.getX(w), e.getY(w))
+        }
+        return decision.accept
+    }
+
+    private fun stylusNear(time: Long) =
+        penPointer != NONE || hover != null || time - lastPenSeen <= PALM_GRACE_MS
+
+    /** Distancia a la última punta vista, si el lápiz sigue cerca. */
+    private fun distToPalmTip(e: MotionEvent, i: Int): Float? {
+        val h = hover
+        val x = if (h != null) h.x else palmTipX
+        val y = if (h != null) h.y else palmTipY
+        if (x.isNaN() || !stylusNear(e.eventTime)) return null
+        return hypot(e.getX(i) - x, e.getY(i) - y)
+    }
+
     private fun pointerDown(e: MotionEvent, i: Int) {
         if (framePointer != NONE) return
         val id = e.getPointerId(i)
@@ -780,8 +826,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             }
         }
         if (!byPen) {
-            // Rechazo de palma: con el lápiz apoyado o recién levantado, los dedos no cuentan.
-            if (penPointer == NONE && e.eventTime - lastPenSeen > PALM_GRACE_MS) {
+            // Con el lápiz en el aire o recién visto, un dedo solo no mueve la hoja; dos o más sí.
+            // Con la punta apoyada escribe el lápiz y estos dedos no entran.
+            if (penPointer == NONE && admitFinger(e, i)) {
                 fingers[id] = PointF(e.getX(i), e.getY(i))
                 // Un solo dedo que no se mueve es un toque (por ejemplo, para reproducir un audio).
                 removeCallbacks(fingerHold)
@@ -804,6 +851,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         if (penPointer != NONE) return
         removeCallbacks(merge)
         fingers.clear() // el lápiz manda: corta cualquier desplazamiento en curso
+        fingerAdmit.clear()
         flip = null
         suppressPan = false
         cancelFlipAnim()
@@ -946,6 +994,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             return
         }
         if (id != penPointer) {
+            fingerAdmit.onUp(id)
             if (id == tapPointer) {
                 removeCallbacks(fingerHold)
                 tapPointer = NONE
@@ -1084,6 +1133,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         penPointer = NONE
         penStroke = null
         fingers.clear()
+        fingerAdmit.clear()
         flip = null
         suppressPan = false
         cancelFlipAnim()
