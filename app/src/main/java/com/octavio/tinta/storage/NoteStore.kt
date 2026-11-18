@@ -24,6 +24,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.zip.Deflater
 import java.util.zip.DeflaterOutputStream
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -94,22 +95,23 @@ class NoteStore private constructor(context: Context) {
 
     /**
      * Copia el estado de la nota ahora (desde el hilo de la UI) y la escribe en el hilo de disco.
-     * `onError` se llama en ese hilo.
+     * El futuro termina cuando el archivo ya se escribió (sync y rename, y la miniatura si va):
+     * normal si salió bien, con error si falló. `onError` se llama en el hilo de disco, antes de
+     * que el futuro falle. La nota se escribe antes que la miniatura, así un corte en el medio
+     * deja los trazos ya en disco.
      */
-    fun save(note: Note, withThumbnail: Boolean, onError: (Throwable) -> Unit = {}) {
+    fun save(note: Note, withThumbnail: Boolean, onError: (Throwable) -> Unit = {}): CompletableFuture<Unit> {
         val id = note.id
         val header = header(note)
         val strokes = note.strokes.toList()
         val images = note.images.toList()
         val texts = note.texts.toList()
         val widgets = note.widgets.toList()
-        io.execute {
-            runCatching {
-                write(id, header, strokes, images, texts, widgets)
-                if (withThumbnail) {
-                    writeThumbnail(id, Render.thumbnail(strokes, images, texts, widgets, header.background, header.pages, 480, 360, header.paperColor))
-                }
-            }.onFailure(onError)
+        return EditorSave.enqueueWrite(io, onError) {
+            write(id, header, strokes, images, texts, widgets)
+            if (withThumbnail) {
+                writeThumbnail(id, Render.thumbnail(strokes, images, texts, widgets, header.background, header.pages, 480, 360, header.paperColor))
+            }
         }
     }
 
