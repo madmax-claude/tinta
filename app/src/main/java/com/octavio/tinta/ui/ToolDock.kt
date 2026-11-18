@@ -6,12 +6,14 @@ import android.graphics.RectF
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.View.OnLayoutChangeListener
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.octavio.tinta.R
 import com.octavio.tinta.dp
@@ -21,7 +23,8 @@ import kotlin.math.abs
 /**
  * Barra fija pegada a un costado de la hoja con las herramientas más elaboradas, como las paletas
  * de AutoCAD: se esconde contra el borde (queda una pestañita para volver a abrirla) y se puede
- * pasar al otro costado.
+ * pasar al otro costado. Si el alto no alcanza, pasa a dos columnas, scrollea o se esconde sola
+ * (sin guardar eso) hasta que la ventana vuelva a entrar.
  */
 @SuppressLint("ViewConstructor")
 class ToolDock(context: Context) : FrameLayout(context) {
@@ -65,9 +68,36 @@ class ToolDock(context: Context) : FrameLayout(context) {
     var onPlaced: (() -> Unit)? = null
 
     private val panel = LinearLayout(context)
+    private val header = LinearLayout(context)
+    private val body = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+    }
+    private val scroller = object : ScrollView(context) {
+        /** 0: sin tope. Si no, el alto máximo del listado para que la barra quepa en la ventana. */
+        var cap = 0
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val h = if (cap > 0) MeasureSpec.makeMeasureSpec(cap, MeasureSpec.AT_MOST) else heightMeasureSpec
+            super.onMeasure(widthMeasureSpec, h)
+        }
+    }.apply {
+        isVerticalScrollBarEnabled = true
+        isScrollbarFadingEnabled = true
+        isFillViewport = false
+        overScrollMode = OVER_SCROLL_IF_CONTENT_SCROLLS
+        addView(body, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+    }
     private val tab = FrameLayout(context)
     private val tabIcon = ImageView(context)
     private val buttons = HashMap<Tool, View>()
+    private var columns = 1
+
+    /** Lo que eligió la persona (se guarda). El escondido automático no. */
+    private var userCollapsed = false
+    private var autoCollapsed = false
+
+    /** La abrió a mano aunque no entre: no volver a esconderla hasta que haya lugar. */
+    private var pinnedOpen = false
 
     /** Las herramientas en el orden en que se ven. */
     private val order = ArrayList(Tool.entries)
@@ -92,7 +122,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
         panel.elevation = context.dp(6f)
         val pad = context.dp(4f).toInt()
         panel.setPadding(pad, pad, pad, pad)
-        val header = LinearLayout(context).apply {
+        header.apply {
             orientation = LinearLayout.HORIZONTAL
             contentDescription = "Mover la barra"
             tip("Arrastrá para subir o bajar la barra")
@@ -110,6 +140,7 @@ class ToolDock(context: Context) : FrameLayout(context) {
             header.addView(b, LinearLayout.LayoutParams(context.dp(30f).toInt(), context.dp(30f).toInt()))
         }
         panel.addView(header)
+        panel.addView(scroller, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         dragVertically(header)
         for (t in Tool.entries) {
             val item = LinearLayout(context).apply {
@@ -130,12 +161,9 @@ class ToolDock(context: Context) : FrameLayout(context) {
                 })
                 setOnClickListener { callbacks?.onDockTool(t, this) }
             }
-            reorder.attach(item)
             buttons[t] = item
-            panel.addView(item, LinearLayout.LayoutParams(context.dp(64f).toInt(), context.dp(52f).toInt()).apply {
-                topMargin = context.dp(2f).toInt()
-            })
         }
+        arrange()
         // El fondo y la flecha van aparte: girar la flecha no puede dar vuelta la forma de la pestaña.
         tabIcon.setImageResource(R.drawable.ic_chevron)
         tabIcon.scaleType = ImageView.ScaleType.CENTER
@@ -146,7 +174,17 @@ class ToolDock(context: Context) : FrameLayout(context) {
         tab.contentDescription = "Mostrar las herramientas"
         dragVertically(tab)
         hide.setOnClickListener { setState(right, collapsed = true) }
-        side.setOnClickListener { setState(!right, collapsed) }
+        side.setOnClickListener {
+            val auto = autoCollapsed
+            setState(!right, userCollapsed)
+            // Cambiar de lado no guarda el escondido automático, ni lo abre si todavía no entra.
+            if (auto) {
+                autoCollapsed = true
+                pinnedOpen = false
+                collapsed = true
+                apply()
+            }
+        }
         addView(panel, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL))
         addView(tab, LayoutParams(context.dp(26f).toInt(), context.dp(64f).toInt(), Gravity.CENTER_VERTICAL))
         apply()
@@ -180,12 +218,44 @@ class ToolDock(context: Context) : FrameLayout(context) {
         arrange()
     }
 
+    private fun toolParams() = LinearLayout.LayoutParams(context.dp(64f).toInt(), context.dp(52f).toInt()).apply {
+        topMargin = context.dp(2f).toInt()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
     private fun arrange() {
         for (t in order) {
             val v = buttons[t] ?: continue
-            panel.removeView(v)
-            panel.addView(v)
+            (v.parent as? ViewGroup)?.removeView(v)
         }
+        body.removeAllViews()
+        val items = order.mapNotNull { buttons[it] }
+        if (columns == 1) {
+            body.orientation = LinearLayout.VERTICAL
+            for (v in items) {
+                body.addView(v, toolParams())
+                reorder.attach(v)
+            }
+            return
+        }
+        body.orientation = LinearLayout.HORIZONTAL
+        val left = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        val rightCol = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        val half = (items.size + 1) / 2
+        items.forEachIndexed { i, v ->
+            v.setOnTouchListener(null)
+            (if (i < half) left else rightCol).addView(v, toolParams())
+        }
+        body.addView(left)
+        body.addView(rightCol, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            marginStart = context.dp(4f).toInt()
+        })
     }
 
     /** Marca la herramienta que está activa (el láser), o ninguna. */
@@ -201,7 +271,11 @@ class ToolDock(context: Context) : FrameLayout(context) {
     }
 
     fun setState(right: Boolean, collapsed: Boolean) {
-        val changed = right != this.right || collapsed != this.collapsed
+        val changed = right != this.right || collapsed != userCollapsed
+        if (autoCollapsed && !collapsed) pinnedOpen = true
+        if (collapsed) pinnedOpen = false
+        userCollapsed = collapsed
+        autoCollapsed = false
         this.right = right
         this.collapsed = collapsed
         apply()
@@ -245,8 +319,64 @@ class ToolDock(context: Context) : FrameLayout(context) {
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
+        fitToWindow()
         placeY()
         onPlaced?.invoke()
+    }
+
+    /**
+     * Mira el alto de la ventana (también al dividirla: el padre cambia de tamaño aunque esta barra
+     * no) y elige una columna, dos, scroll o la pestaña. El escondido automático no se guarda.
+     */
+    private fun fitToWindow() {
+        val parentView = parent as? View ?: return
+        val available = (parentView.height - context.dp(20f)).toInt()
+        if (userCollapsed) return
+        if (available <= 0) return
+        val headerH = header.height.takeIf { it > 0 } ?: header.measuredHeight
+        if (headerH <= 0) return
+        val pad = panel.paddingTop + panel.paddingBottom
+        val itemH = itemSlot.toInt().coerceAtLeast(1)
+        val n = order.size.coerceAtLeast(1)
+        val one = pad + headerH + n * itemH
+        val two = pad + headerH + ((n + 1) / 2) * itemH
+        val twoWidth = toolWidth() * 2 + context.dp(12f).toInt()
+        val mode = dockFit(available, one, two, twoWidth, parentView.width, pad + headerH + itemH)
+        if (!pinnedOpen && mode == DockFit.COLLAPSE) {
+            if (!autoCollapsed || !collapsed) {
+                autoCollapsed = true
+                collapsed = true
+                apply()
+            }
+            return
+        }
+        if (autoCollapsed && mode != DockFit.COLLAPSE) {
+            autoCollapsed = false
+            collapsed = false
+            pinnedOpen = false
+            apply()
+        }
+        if (mode == DockFit.ONE) pinnedOpen = false
+        if (collapsed) return
+        val cols = if (mode == DockFit.TWO) 2 else 1
+        val content = if (cols == 2) two else one
+        val wantCap = if (content <= available) 0 else (available - headerH - pad).coerceAtLeast(1)
+        var again = false
+        if (cols != columns) {
+            columns = cols
+            arrange()
+            again = true
+        }
+        if (wantCap != scroller.cap) {
+            scroller.cap = wantCap
+            again = true
+        }
+        if (again) requestLayout()
+    }
+
+    private fun toolWidth(): Int {
+        val w = buttons.values.firstOrNull()?.layoutParams?.width ?: 0
+        return if (w > 0) w else context.dp(64f).toInt()
     }
 
     private fun placeY() {
@@ -318,8 +448,16 @@ class ToolDock(context: Context) : FrameLayout(context) {
         }
     }
 
+    private val onParentLayout = OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> fitToWindow() }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         apply()
+        (parent as? View)?.addOnLayoutChangeListener(onParentLayout)
+    }
+
+    override fun onDetachedFromWindow() {
+        (parent as? View)?.removeOnLayoutChangeListener(onParentLayout)
+        super.onDetachedFromWindow()
     }
 }
