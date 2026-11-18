@@ -255,7 +255,8 @@ class Prefs(context: Context) {
 
 /**
  * Base de las pantallas: aplica el modo oscuro elegido en la app, que puede no coincidir con el del
- * sistema, cambiando el modo noche de la configuración (así se usan los recursos de values-night).
+ * sistema, cambiando sólo el modo noche de la configuración (así se usan los recursos de
+ * values-night). La escala de letra, el idioma y la densidad siguen siendo los del sistema.
  */
 open class TintaActivity : ComponentActivity() {
     /** Cómo estaban los mensajes de ayuda al armar esta pantalla (si cambian, se vuelve a armar). */
@@ -272,8 +273,11 @@ open class TintaActivity : ComponentActivity() {
         helpShown = Help.on
         lookShown = Prefs(newBase).look
         val night = if (Prefs(newBase).dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
-        val base = newBase.resources.configuration.uiMode
-        applyOverrideConfiguration(Configuration().apply { uiMode = (base and Configuration.UI_MODE_NIGHT_MASK.inv()) or night })
+        // Una Configuration vacía deja la escala de letra, el idioma o la densidad en el valor por
+        // defecto. Se copia la del sistema y sólo se pisa el modo noche.
+        val override = Configuration(newBase.resources.configuration)
+        override.uiMode = (override.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night
+        applyOverrideConfiguration(override)
     }
 
     val isDark get() = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
