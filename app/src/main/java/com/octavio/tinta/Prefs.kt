@@ -133,6 +133,11 @@ class Prefs(context: Context) {
         get() = p.getBoolean("holdForShapes", true)
         set(v) = p.edit { putBoolean("holdForShapes", v) }
 
+    /** Toque con dos dedos deshace; con tres, rehace. */
+    var fingerUndo: Boolean
+        get() = p.getBoolean("fingerUndo", true)
+        set(v) = p.edit { putBoolean("fingerUndo", v) }
+
     var lassoFilter: LassoFilter
         get() = LassoFilter(
             p.getBoolean("lassoPens", true),

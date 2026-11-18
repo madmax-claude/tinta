@@ -624,6 +624,21 @@ class MainActivity : TintaActivity() {
                 applyWallpapers()
             },
         ) { refreshListRow = it }
+        box.addView(Switch(this).apply {
+            text = getString(R.string.finger_undo)
+            textSize = 16f
+            setTextColor(getColor(R.color.ink))
+            isChecked = prefs.fingerUndo
+            minimumHeight = dp(48f).toInt()
+            setPadding(0, dp(16f).toInt(), 0, 0)
+            setOnCheckedChangeListener { _, on -> prefs.fingerUndo = on }
+        })
+        box.addView(TextView(this).apply {
+            text = getString(R.string.finger_undo_hint)
+            textSize = 13f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(4f).toInt(), dp(56f).toInt(), 0)
+        })
         // Al cerrar, si cambió, la pantalla se vuelve a armar (sin o con las etiquetas de los botones).
         AlertDialog.Builder(this)
             .setTitle(R.string.settings)
