@@ -62,7 +62,7 @@ Tinta no tiene cuentas ni servidores: las notas quedan en la tablet. Detalle en
 
 ## Licencia
 
-Copyright (C) 2026 Octavio
+Copyright (C) 2026 madmax-claude
 
 Este programa es software libre: se puede redistribuir y modificar bajo los términos de la
 Licencia Pública General de GNU (GPL), versión 3, publicada por la Free Software Foundation.

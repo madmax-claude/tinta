@@ -600,6 +600,7 @@ class EditorActivity :
         canvas.lassoFilter = prefs.lassoFilter
         canvas.holdToErase = prefs.holdToErase
         canvas.holdForShapes = prefs.holdForShapes
+        canvas.fingerUndo = prefs.fingerUndo
     }
 
     // --- Lienzo ---
@@ -1057,6 +1058,7 @@ class EditorActivity :
         canvas.lassoFilter = prefs.lassoFilter
         canvas.holdToErase = prefs.holdToErase
         canvas.holdForShapes = prefs.holdForShapes
+        canvas.fingerUndo = prefs.fingerUndo
         applyTool()
     }
 
@@ -1184,6 +1186,11 @@ class EditorActivity :
                 applyTool()
             },
             onDelete = { deletePen(index) },
+            fingerUndo = canvas.fingerUndo,
+            onFingerUndo = {
+                canvas.fingerUndo = it
+                prefs.fingerUndo = it
+            },
         )
     }
 
@@ -1477,6 +1484,10 @@ class EditorActivity :
     override fun onRedo() {
         undoRedo { it.redo() }
     }
+
+    override fun onFingerUndo() = onUndo()
+
+    override fun onFingerRedo() = onRedo()
 
     private fun undoRedo(step: (History) -> History.Edit?) {
         val n = note ?: return

@@ -29,6 +29,8 @@
     <string name="empty_folder">Esta carpeta está vacía.\nCreá una nota o mové alguna acá desde su menú.</string>
     <string name="undo">Deshacer</string>
     <string name="redo">Rehacer</string>
+    <string name="finger_undo">Deshacer con los dedos</string>
+    <string name="finger_undo_hint">Un toque con dos dedos deshace y uno con tres rehace. Si los dedos se mueven, sigue siendo el zoom o el pase de hoja.</string>
     <string name="sheet">Hoja y fondo</string>
     <string name="add_image">Agregar imagen</string>
     <string name="open_beside">Abrir otra nota al lado</string>
