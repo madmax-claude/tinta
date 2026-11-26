@@ -235,20 +235,35 @@ object Exporter {
     }
 
     /**
-     * Exporta `n` (una copia de la nota, que se lee en otro hilo) en `format` y abre "Compartir".
-     * `launch` envuelve el abrir otra pantalla (el editor lo usa para no creer que lo cerraron).
+     * Exporta `n` (una copia de la nota, que se lee en otro hilo) en `format` y abre "Compartir",
+     * o "Guardar como…" si `saveAs` (ahí el usuario elige carpeta y nombre). `saver` es el registro
+     * del selector, armado con la pantalla. `launch` envuelve el abrir otra pantalla (el editor lo
+     * usa para no creer que lo cerraron).
      */
-    fun start(activity: Activity, store: NoteStore, n: Note, format: Format, pages: List<Int>? = null, launch: (() -> Unit) -> Unit) {
+    fun start(
+        activity: Activity,
+        store: NoteStore,
+        n: Note,
+        format: Format,
+        pages: List<Int>? = null,
+        saveAs: Boolean = false,
+        saver: ExportSaver? = null,
+        launch: (() -> Unit) -> Unit,
+    ) {
         fun fail(e: Throwable) = activity.runOnUiThread { activity.toastLong("No se pudo exportar: ${e.message}") }
+        fun done(files: List<File>, mime: String, text: String? = null) {
+            if (saveAs) deliverSave(activity, n.title, format, files, saver, launch, ::fail)
+            else activity.runOnUiThread { launch { share(activity, files, mime, text) } }
+        }
         when (format) {
             Format.PDF -> store.io.execute {
                 runCatching { Render.pdf(activity, n.title, n.strokes, n.images, n.texts, n.widgets, n.background, n.pages, n.paperColor, pages) }
-                    .onSuccess { f -> activity.runOnUiThread { launch { share(activity, listOf(f), "application/pdf") } } }
+                    .onSuccess { f -> done(listOf(f), MIME_PDF) }
                     .onFailure(::fail)
             }
             Format.IMAGES -> Thread({
                 runCatching { images(activity, n) }
-                    .onSuccess { files -> activity.runOnUiThread { launch { share(activity, files, "image/png") } } }
+                    .onSuccess { files -> done(files, MIME_PNG) }
                     .onFailure(::fail)
             }, "tinta-exportar").start()
             Format.TEXT -> HandText.get(activity).read(
@@ -261,15 +276,53 @@ object Exporter {
                 }
                 val text = text(n, lines)
                 val f = textFile(activity, n, text)
-                launch { share(activity, listOf(f), "text/plain", text) }
+                done(listOf(f), MIME_TEXT, text)
             }
             Format.NOTE -> store.io.execute {
                 // En el hilo de disco: después de que se terminó de guardar.
                 runCatching { noteBundle(activity, store, n) }
-                    .onSuccess { f -> activity.runOnUiThread { launch { share(activity, listOf(f), BUNDLE_MIME) } } }
+                    .onSuccess { f -> done(listOf(f), BUNDLE_MIME) }
                     .onFailure(::fail)
             }
         }
+    }
+
+    /**
+     * El archivo ya está en el caché. Con varias imágenes se arma un zip (un solo documento) y se
+     * abre el selector del sistema para que el usuario elija dónde dejarlo.
+     */
+    private fun deliverSave(
+        activity: Activity,
+        title: String,
+        format: Format,
+        files: List<File>,
+        saver: ExportSaver?,
+        launch: (() -> Unit) -> Unit,
+        fail: (Throwable) -> Unit,
+    ) {
+        if (saver == null) {
+            fail(IllegalStateException("no hay dónde guardar"))
+            return
+        }
+        val ready = runCatching {
+            val target = saveTarget(title, format, files.map { it.name })
+            val file = if (!target.zip) {
+                files.single()
+            } else {
+                // Nombre único en el caché: otro guardado de la misma nota no pisa este zip
+                // mientras el selector sigue abierto. El nombre que ve el usuario es el del target.
+                val dest = File(dir(activity), target.suggestedName + "." + System.nanoTime())
+                zipFiles(dest, files)
+                dest
+            }
+            target to file
+        }
+        ready.onSuccess { (target, file) ->
+            activity.runOnUiThread {
+                if (activity.isDestroyed) return@runOnUiThread
+                launch { saver.open(target.mime, target.suggestedName, file) }
+            }
+        }.onFailure(fail)
     }
 
     private fun Activity.toastLong(text: String) = toast(text, long = true)

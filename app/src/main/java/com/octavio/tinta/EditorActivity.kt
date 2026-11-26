@@ -36,6 +36,7 @@ import androidx.lifecycle.Lifecycle
 import com.octavio.tinta.canvas.Elements
 import com.octavio.tinta.canvas.NoteCanvasView
 import com.octavio.tinta.canvas.NoteCanvasView.Mode
+import com.octavio.tinta.export.ExportSaver
 import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.model.Appearance
@@ -206,6 +207,9 @@ class EditorActivity :
         if (granted) startRecording() else toast("Sin permiso para el micrófono no se puede grabar")
     }
 
+    /** "Guardar como…" de una exportación. Tiene que existir antes de que la pantalla arranque. */
+    private val exportSaver = ExportSaver(this)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -233,7 +237,9 @@ class EditorActivity :
             setOnClickListener { toggleDark() }
         }
         findViewById<View>(R.id.fit).setOnClickListener { canvas.fitToContent() }
-        findViewById<View>(R.id.export).setOnClickListener { v -> Popups.exportFormats(this, v, ::export) }
+        findViewById<View>(R.id.export).setOnClickListener { v ->
+            Popups.exportFormats(this, v) { format, saveAs -> export(format, saveAs) }
+        }
         findViewById<View>(R.id.fullscreen).setOnClickListener { setFullscreen(true) }
         listOf(R.id.search, R.id.sheet, R.id.beside, R.id.dark, R.id.fit, R.id.fullscreen, R.id.export).forEach {
             findViewById<View>(it).apply { tip(contentDescription) }
@@ -2046,7 +2052,7 @@ class EditorActivity :
     }
 
     /** Exportar la nota que se ve (en el formato elegido). La nota entera se guarda antes. */
-    private fun export(format: Exporter.Format) {
+    private fun export(format: Exporter.Format, saveAs: Boolean) {
         val n = note ?: return
         canvas.finishPending()
         if (format == Exporter.Format.PDF && n.pages.paged) {
@@ -2059,16 +2065,16 @@ class EditorActivity :
                     canvas.currentPage(),
                     PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages, n.paperColor),
                 ) { which ->
-                    if (which.isEmpty()) toast("Marcá al menos una hoja") else exportNow(format, which)
+                    if (which.isEmpty()) toast("Marcá al menos una hoja") else exportNow(format, which, saveAs)
                 }
                 return
             }
         }
-        exportNow(format, null)
+        exportNow(format, null, saveAs)
     }
 
-    /** `pages`: hojas del PDF, o null para la nota entera. */
-    private fun exportNow(format: Exporter.Format, pages: List<Int>?) {
+    /** `pages`: hojas del PDF, o null para la nota entera. `saveAs`: el usuario elige dónde, en vez de compartir. */
+    private fun exportNow(format: Exporter.Format, pages: List<Int>?, saveAs: Boolean) {
         val n = note ?: return
         canvas.finishPending()
         if (format == Exporter.Format.NOTE) {
@@ -2076,7 +2082,7 @@ class EditorActivity :
             save(withThumbnail = true)
         }
         if (format != Exporter.Format.TEXT) hint(getString(R.string.exporting))
-        Exporter.start(this, store, Exporter.snapshot(n), format, pages) { open -> launching(open) }
+        Exporter.start(this, store, Exporter.snapshot(n), format, pages, saveAs = saveAs, saver = exportSaver) { open -> launching(open) }
     }
 
     companion object {

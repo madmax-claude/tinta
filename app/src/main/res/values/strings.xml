@@ -44,6 +44,12 @@
     <string name="add_text">Escribir</string>
     <string name="export">Exportar…</string>
     <string name="exporting">Exportando…</string>
+    <string name="export_as">Exportar como</string>
+    <string name="export_save_as">Guardar como…</string>
+    <string name="export_save_as_detail">Elegí la carpeta y el nombre. Si son varias imágenes, se guardan juntas en un .zip.</string>
+    <string name="export_saved">Guardado</string>
+    <string name="export_save_failed">No se pudo guardar: %1$s</string>
+    <string name="export_save_missing">el archivo ya no está</string>
     <string name="color_top_bar">Barra de arriba (pestañas y buscador)</string>
     <string name="color_tools">Barras de herramientas</string>
     <string name="color_tab">Pestaña elegida</string>
