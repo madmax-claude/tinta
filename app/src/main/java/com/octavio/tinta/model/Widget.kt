@@ -46,7 +46,12 @@ sealed class Widget {
         .put("height", height.toDouble())
 
     companion object {
-        /** null si es de un tipo desconocido (de una versión más nueva) o está dañado. */
+        /**
+         * null si esta versión no lo puede representar: tipo desconocido, subtipo desconocido
+         * (un cuerpo, una figura o un medio que no están acá) o JSON dañado. Quien lee el archivo
+         * guarda esos bytes y los reescribe: reemplazarlos por un cubo, un rectángulo o un audio
+         * los perdería al guardar.
+         */
         fun fromJson(o: JSONObject, mediaDir: File): Widget? = runCatching {
             val l = o.getDouble("left").toFloat()
             val t = o.getDouble("top").toFloat()
@@ -65,22 +70,34 @@ sealed class Widget {
                     f("xMin", -3f), f("xMax", 3f), f("yMin", -3f), f("yMax", 3f),
                     f("yaw", 35f), f("pitch", 25f), o.optInt("color", Tool.INK_COLORS[1]),
                 )
-                "solid" -> Solid(
-                    l, t, w, h, SolidKind.fromId(o.getString("kind")),
-                    f("a", 1f), f("b", 1f), f("c", 1f), f("yaw", 30f), f("pitch", 20f),
-                    o.optInt("color", Tool.INK_COLORS[0]), o.optBoolean("hidden", true), o.optBoolean("shaded", true),
-                )
-                "figure2d" -> Figure2D(
-                    l, t, w, h, FigureKind.fromId(o.getString("kind")),
-                    o.optInt("color", Tool.INK_COLORS[0]), o.optBoolean("filled", false),
-                )
-                "media" -> Media(
-                    l, t, w, h,
-                    if (o.getString("kind") == "video") MediaKind.VIDEO else MediaKind.AUDIO,
-                    File(mediaDir, o.getString("file")),
-                    o.optString("thumb", "").takeIf { it.isNotEmpty() }?.let { File(mediaDir, it) },
-                    o.optLong("duration"),
-                )
+                "solid" -> {
+                    val kind = SolidKind.entries.firstOrNull { it.id == o.getString("kind") } ?: return@runCatching null
+                    Solid(
+                        l, t, w, h, kind,
+                        f("a", 1f), f("b", 1f), f("c", 1f), f("yaw", 30f), f("pitch", 20f),
+                        o.optInt("color", Tool.INK_COLORS[0]), o.optBoolean("hidden", true), o.optBoolean("shaded", true),
+                    )
+                }
+                "figure2d" -> {
+                    val kind = FigureKind.entries.firstOrNull { it.id == o.getString("kind") } ?: return@runCatching null
+                    Figure2D(
+                        l, t, w, h, kind,
+                        o.optInt("color", Tool.INK_COLORS[0]), o.optBoolean("filled", false),
+                    )
+                }
+                "media" -> {
+                    val kind = when (o.getString("kind")) {
+                        "video" -> MediaKind.VIDEO
+                        "audio" -> MediaKind.AUDIO
+                        else -> return@runCatching null
+                    }
+                    Media(
+                        l, t, w, h, kind,
+                        File(mediaDir, o.getString("file")),
+                        o.optString("thumb", "").takeIf { it.isNotEmpty() }?.let { File(mediaDir, it) },
+                        o.optLong("duration"),
+                    )
+                }
                 else -> null
             }
         }.getOrNull()
@@ -148,6 +165,7 @@ enum class SolidKind(val id: String, val label: String, val labels: List<String>
     SPHERE("esfera", "Esfera", listOf("Radio"));
 
     companion object {
+        /** Si no está, el cubo. Al leer una nota no se usa: un id desconocido se conserva en crudo. */
         fun fromId(id: String) = entries.firstOrNull { it.id == id } ?: CUBE
     }
 }
@@ -193,6 +211,7 @@ enum class FigureKind(val id: String, val label: String) {
     ARROW("flecha", "Flecha");
 
     companion object {
+        /** Si no está, el rectángulo. Al leer una nota no se usa: un id desconocido se conserva en crudo. */
         fun fromId(id: String) = entries.firstOrNull { it.id == id } ?: RECT
     }
 }

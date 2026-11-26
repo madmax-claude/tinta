@@ -344,6 +344,7 @@ object Exporter {
     fun snapshot(n: Note) = Note(
         n.id, n.title, n.background, n.created, n.modified, n.viewport, n.pages,
         n.strokes.toMutableList(), n.images.toMutableList(), n.texts.toMutableList(), n.widgets.toMutableList(), n.paperColor,
+        n.preservedWidgets.mapTo(mutableListOf()) { it.copyOf() },
     )
 
     /** Comparte los archivos con las apps de Android (LocalSend, Drive, WhatsApp…). */

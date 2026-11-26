@@ -59,17 +59,7 @@ class NoteStore private constructor(context: Context) {
     /** Foto de la nota para abrirla rápido. Se puede borrar: el `.tinta` la vuelve a armar. */
     fun vista(id: String) = File(dir, "$id.vista")
 
-    fun list(): List<NoteInfo> = dir.listFiles { f -> f.name.endsWith(".tinta") }.orEmpty()
-        .mapNotNull { f ->
-            runCatching {
-                DataInputStream(BufferedInputStream(f.inputStream(), 512)).use { input ->
-                    val h = NoteFormat.readHeader(input)
-                    val id = f.name.removeSuffix(".tinta")
-                    NoteInfo(id, h.title, h.modified, h.strokeCount, library.folderOf(id))
-                }
-            }.getOrNull()
-        }
-        .sortedByDescending { it.modified }
+    fun list(): List<NoteInfo> = readList(dir, library::folderOf)
 
     /** Imágenes, audios y videos de la nota: `notes/<id>.media/`. */
     fun mediaDir(id: String) = File(dir, "$id.media").apply { mkdirs() }
@@ -83,15 +73,10 @@ class NoteStore private constructor(context: Context) {
     /**
      * Borra los medios que la nota ya no usa. Sólo al abrirla en el editor, cuando no hay historial
      * que los pueda recuperar ni otra pantalla con la nota en memoria. Llamar desde [io].
+     * Si quedó JSON de widgets sin leer, no borra nada: ese JSON puede nombrar un archivo.
      */
     fun cleanMedia(note: Note, keep: Collection<File> = emptyList()) {
-        val used = HashSet<String>()
-        // Lo copiado o cortado con el lazo puede venir de esta nota y todavía no se pegó.
-        keep.filter { it.parentFile == mediaDir(note.id) }.mapTo(used) { it.name }
-        note.images.mapTo(used) { it.file.name }
-        used.add(Imports.ORIGINAL) // de donde salen las páginas de un PDF
-        note.widgets.flatMapTo(used) { w -> w.files.map { it.name } }
-        mediaDir(note.id).listFiles().orEmpty().filter { it.name !in used && !it.name.endsWith(".tmp") }.forEach { it.delete() }
+        unusedMedia(note, mediaDir(note.id), keep).forEach { it.delete() }
     }
 
     /**
@@ -108,8 +93,9 @@ class NoteStore private constructor(context: Context) {
         val images = note.images.toList()
         val texts = note.texts.toList()
         val widgets = note.widgets.toList()
+        val preserved = note.preservedWidgets.map { it.copyOf() }
         return EditorSave.enqueueWrite(io, onError) {
-            write(id, header, strokes, images, texts, widgets)
+            write(id, header, strokes, images, texts, widgets, preserved)
             if (withThumbnail) {
                 writeThumbnail(id, Render.thumbnail(strokes, images, texts, widgets, header.background, header.pages, 480, 360, header.paperColor))
             }
@@ -121,7 +107,10 @@ class NoteStore private constructor(context: Context) {
         paperColor = note.paperColor,
     )
 
-    /** Escribe la nota completa de forma atómica. Llamar desde [io]. */
+    /**
+     * Escribe la nota completa de forma atómica. Llamar desde [io].
+     * [preservedWidgets] es el JSON que no se pudo leer: no omitirlo si la nota salió de [readNote].
+     */
     fun write(
         id: String,
         header: NoteFormat.Header,
@@ -129,7 +118,8 @@ class NoteStore private constructor(context: Context) {
         images: List<NoteImage> = emptyList(),
         texts: List<NoteText> = emptyList(),
         widgets: List<Widget> = emptyList(),
-    ) = writeNote(file(id), header, strokes, images, texts, widgets)
+        preservedWidgets: List<ByteArray> = emptyList(),
+    ) = writeNote(file(id), header, strokes, images, texts, widgets, preservedWidgets)
 
     fun writeThumbnail(id: String, bitmap: Bitmap) {
         val dest = thumbnail(id)
@@ -170,14 +160,51 @@ class NoteStore private constructor(context: Context) {
                     )
                 }
                 if (h.version >= 2) {
-                    NoteFormat.readElements(data, h.version, media, note.images, note.texts, note.widgets) { keep(media, it) }
+                    NoteFormat.readElements(
+                        data, h.version, media, note.images, note.texts, note.widgets, note.preservedWidgets,
+                    ) { keep(media, it) }
                 }
                 if (h.version >= 9) {
                     for ((i, g) in NoteFormat.readGroups(data, note.strokes.size)) note.strokes[i].group = g
                 }
             }
-            Log.i(TAG, "«${h.title}»: ${note.strokes.size} trazos leídos en ${(System.nanoTime() - t0) / 1_000_000} ms")
+            val extra = if (note.preservedWidgets.isEmpty()) "" else ", ${note.preservedWidgets.size} widgets sin leer"
+            Log.i(TAG, "«${h.title}»: ${note.strokes.size} trazos leídos$extra en ${(System.nanoTime() - t0) / 1_000_000} ms")
             note
+        }
+
+        /**
+         * Una entrada por cada `.tinta`. Si la cabecera no se puede leer, la nota queda marcada
+         * como dañada y el archivo no se toca: no desaparece de la lista ni se borra.
+         */
+        internal fun readList(dir: File, folderOf: (String) -> String? = { null }): List<NoteInfo> =
+            dir.listFiles { f -> f.isFile && f.name.endsWith(".tinta") }.orEmpty()
+                .map { f ->
+                    val id = f.name.removeSuffix(".tinta")
+                    runCatching {
+                        DataInputStream(BufferedInputStream(f.inputStream(), 512)).use { input ->
+                            val h = NoteFormat.readHeader(input)
+                            NoteInfo(id, h.title, h.modified, h.strokeCount, folderOf(id))
+                        }
+                    }.getOrElse {
+                        NoteInfo(id, "", f.lastModified(), 0, folderOf(id), damaged = true)
+                    }
+                }
+                .sortedByDescending { it.modified }
+
+        /**
+         * Medios de [dir] que la nota ya no usa. Vacío si quedó JSON de widgets sin leer:
+         * pueden nombrar un archivo, y borrarlo lo perdería.
+         */
+        internal fun unusedMedia(note: Note, dir: File, keep: Collection<File> = emptyList()): List<File> {
+            if (note.preservedWidgets.isNotEmpty()) return emptyList()
+            val used = HashSet<String>()
+            // Lo copiado o cortado con el lazo puede venir de esta nota y todavía no se pegó.
+            keep.filter { it.parentFile == dir }.mapTo(used) { it.name }
+            note.images.mapTo(used) { it.file.name }
+            used.add(Imports.ORIGINAL) // de donde salen las páginas de un PDF
+            note.widgets.flatMapTo(used) { w -> w.files.map { it.name } }
+            return dir.listFiles().orEmpty().filter { it.name !in used && !it.name.endsWith(".tmp") }
         }
 
         /** Escribe una nota (o un sticker) en `target` de forma atómica. */
@@ -188,6 +215,7 @@ class NoteStore private constructor(context: Context) {
             images: List<NoteImage>,
             texts: List<NoteText>,
             widgets: List<Widget>,
+            preservedWidgets: List<ByteArray> = emptyList(),
         ) {
             val tmp = File(target.parentFile, target.name + ".tmp")
             val fos = FileOutputStream(tmp)
@@ -212,7 +240,7 @@ class NoteStore private constructor(context: Context) {
                     )
                 }
                 // La 12 también lleva la letra y el recorte de cada texto: quien la lee mira la versión.
-                NoteFormat.writeElements(out, images, texts, widgets, version >= 11)
+                NoteFormat.writeElements(out, images, texts, widgets, version >= 11, preservedWidgets)
                 if (version >= 9) NoteFormat.writeGroups(out, strokes.map { it.group })
                 out.flush()
                 compressed.finish()

@@ -811,7 +811,8 @@ class MainActivity : TintaActivity() {
                 n++
             }
             if (first != null) snippets[info.id] = "«${first.text}»" + if (n > 1) " y ${n - 1} más" else ""
-            if (first != null || Find.normalize(info.title).contains(nq)) out.add(info)
+            // La dañada no tiene título legible: igual tiene que seguir en la lista.
+            if (first != null || info.damaged || Find.normalize(info.title).contains(nq)) out.add(info)
         }
         return out
     }
@@ -823,7 +824,7 @@ class MainActivity : TintaActivity() {
         val open = notes.map { it.id }.filter(EditorActivity::isOpen).toSet()
         searchStatus.visibility = View.GONE
         HandText.get(this).readAll(
-            notes,
+            notes.filter { !it.damaged },
             load = { id -> runCatching { store.load(id) }.getOrNull() },
             isOpen = { it in open },
             progress = { text ->
@@ -1057,6 +1058,10 @@ class MainActivity : TintaActivity() {
     // --- Notas ---
 
     private fun openNote(id: String) {
+        if (notes.any { it.id == id && it.damaged }) {
+            toast(getString(R.string.damaged_note_open))
+            return
+        }
         if (EditorActivity.isOpen(id)) {
             toast(getString(R.string.already_open))
             return
@@ -1229,22 +1234,25 @@ class MainActivity : TintaActivity() {
 
     private fun showMenu(anchor: View, info: NoteInfo) {
         PopupMenu(this, anchor).apply {
-            menu.add(R.string.rename).setOnMenuItemClickListener { rename(info); true }
-            menu.add(R.string.open_side).setOnMenuItemClickListener {
-                if (EditorActivity.isOpen(info.id)) toast(getString(R.string.already_open)) else EditorActivity.openBeside(this@MainActivity, info.id)
-                true
+            if (!info.damaged) {
+                menu.add(R.string.rename).setOnMenuItemClickListener { rename(info); true }
+                menu.add(R.string.open_side).setOnMenuItemClickListener {
+                    if (EditorActivity.isOpen(info.id)) toast(getString(R.string.already_open)) else EditorActivity.openBeside(this@MainActivity, info.id)
+                    true
+                }
+                menu.add(R.string.export).setOnMenuItemClickListener {
+                    Popups.exportFormats(this@MainActivity, anchor) { f, saveAs -> export(info, f, saveAs) }
+                    true
+                }
             }
             menu.add(R.string.move_to_folder).setOnMenuItemClickListener { moveToFolder(info); true }
-            menu.add(R.string.export).setOnMenuItemClickListener {
-                Popups.exportFormats(this@MainActivity, anchor) { f, saveAs -> export(info, f, saveAs) }
-                true
-            }
             menu.add(R.string.delete).setOnMenuItemClickListener {
                 if (EditorActivity.isOpen(info.id)) {
                     toast(getString(R.string.close_first))
                     return@setOnMenuItemClickListener true
                 }
-                confirm(getString(R.string.delete_note, info.title), getString(R.string.delete)) {
+                val name = if (info.damaged) getString(R.string.damaged_note) else info.title
+                confirm(getString(R.string.delete_note, name), getString(R.string.delete)) {
                     NoteCache.drop(info.id)
                     store.io.execute {
                         store.delete(info.id)
@@ -1268,7 +1276,7 @@ class MainActivity : TintaActivity() {
                 runCatching {
                     val note = store.load(info.id)
                     note.title = title
-                    store.write(note.id, store.header(note), note.strokes, note.images, note.texts, note.widgets)
+                    store.write(note.id, store.header(note), note.strokes, note.images, note.texts, note.widgets, note.preservedWidgets)
                 }
                 refresh()
             }
@@ -1366,10 +1374,13 @@ class MainActivity : TintaActivity() {
                 val face = Fonts.typeface(prefs.font)
                 title.typeface = face
                 meta.typeface = face
-                title.text = info.title
+                title.text = if (info.damaged) getString(R.string.damaged_note) else info.title
                 val ago = DateUtils.getRelativeTimeSpanString(info.modified, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
                 val where = if (folder == null) pathName(info.folder) else null
-                meta.text = snippets[info.id] ?: listOfNotNull(ago, "${info.strokeCount} trazos", where).joinToString(" · ")
+                meta.text = when {
+                    info.damaged -> getString(R.string.damaged_note_meta)
+                    else -> snippets[info.id] ?: listOfNotNull(ago, "${info.strokeCount} trazos", where).joinToString(" · ")
+                }
                 itemView.setOnClickListener { openNote(info.id) }
                 // Mantener apretada la levanta para llevarla a una carpeta; sin moverla, el menú.
                 itemView.setOnLongClickListener {

@@ -44,6 +44,11 @@ class Note(
     val widgets: MutableList<Widget> = mutableListOf(),
     /** Color de la hoja (ARGB), o null para el de siempre. En modo oscuro se ve oscura igual. */
     var paperColor: Int? = null,
+    /**
+     * JSON (los bytes del archivo) de widgets que esta versión no puede representar. Se vuelven a
+     * escribir tal cual: si no, el próximo guardado los borra.
+     */
+    val preservedWidgets: MutableList<ByteArray> = mutableListOf(),
 )
 
 /**
@@ -101,5 +106,15 @@ class NoteText(
     }
 }
 
-/** Lo que muestra la lista de notas sin decodificar los trazos. */
-data class NoteInfo(val id: String, val title: String, val modified: Long, val strokeCount: Int, val folder: String? = null)
+/**
+ * Lo que muestra la lista de notas sin decodificar los trazos. Con [damaged], la cabecera no se
+ * pudo leer: el archivo sigue en disco, pero la nota no se abre ni se edita como una sana.
+ */
+data class NoteInfo(
+    val id: String,
+    val title: String,
+    val modified: Long,
+    val strokeCount: Int,
+    val folder: String? = null,
+    val damaged: Boolean = false,
+)
