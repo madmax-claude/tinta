@@ -85,6 +85,7 @@ import com.octavio.tinta.ui.RecorderBar
 import com.octavio.tinta.ui.SearchPanel
 import com.octavio.tinta.ui.SelectionBar
 import com.octavio.tinta.ui.TabStrip
+import com.octavio.tinta.ui.TopBarFit
 import com.octavio.tinta.ui.TextBoxEditor
 import com.octavio.tinta.ui.TimerPanel
 import com.octavio.tinta.ui.TimerState
@@ -229,8 +230,8 @@ class EditorActivity :
 
         findViewById<View>(R.id.back).setOnClickListener { finish() }
         findViewById<View>(R.id.search).setOnClickListener { if (searchPanel.isOpen) closeSearch() else openSearch() }
-        findViewById<View>(R.id.sheet).setOnClickListener { pickSheet(it) }
-        findViewById<View>(R.id.beside).setOnClickListener { chooseNote(it, beside = true) }
+        findViewById<View>(R.id.sheet).setOnClickListener { pickSheet(shownAnchor(it)) }
+        findViewById<View>(R.id.beside).setOnClickListener { chooseNote(shownAnchor(it), beside = true) }
         findViewById<ImageButton>(R.id.dark).apply {
             setImageResource(if (isDark) R.drawable.ic_light else R.drawable.ic_dark)
             contentDescription = getString(if (isDark) R.string.light_mode else R.string.dark_mode)
@@ -238,12 +239,13 @@ class EditorActivity :
         }
         findViewById<View>(R.id.fit).setOnClickListener { canvas.fitToContent() }
         findViewById<View>(R.id.export).setOnClickListener { v ->
-            Popups.exportFormats(this, v) { format, saveAs -> export(format, saveAs) }
+            Popups.exportFormats(this, shownAnchor(v)) { format, saveAs -> export(format, saveAs) }
         }
         findViewById<View>(R.id.fullscreen).setOnClickListener { setFullscreen(true) }
         listOf(R.id.search, R.id.sheet, R.id.beside, R.id.dark, R.id.fit, R.id.fullscreen, R.id.export).forEach {
             findViewById<View>(it).apply { tip(contentDescription) }
         }
+        TopBarFit.install(findViewById(R.id.topbar))
 
         setupOverlays()
         applyColors()
@@ -1621,7 +1623,7 @@ class EditorActivity :
     private fun pagesMenu(anchor: View) {
         if (!canvas.pages.paged) {
             hint(getString(R.string.pages_need_size), long = true)
-            pickSheet(findViewById(R.id.sheet))
+            pickSheet(shownAnchor(findViewById(R.id.sheet)))
             return
         }
         val k = canvas.currentPage()
@@ -1950,6 +1952,13 @@ class EditorActivity :
         h.record(History.Group(edits))
         canvas.elementsChanged()
         changed(redraw = true)
+    }
+
+    /** Si el botón pasó al menú de desborde, el popup se abre desde ahí. */
+    private fun shownAnchor(preferred: View): View {
+        if (preferred.isShown) return preferred
+        val overflow = findViewById<View>(R.id.top_overflow)
+        return if (overflow != null && overflow.isShown) overflow else preferred
     }
 
     private fun pickSheet(anchor: View) {
