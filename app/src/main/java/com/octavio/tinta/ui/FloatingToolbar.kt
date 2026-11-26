@@ -119,7 +119,10 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     private fun button(icon: Int, description: String) = ImageButton(context).apply {
         setImageResource(icon)
         background = context.getDrawable(R.drawable.bg_tool)
-        val p = context.dp(7f).toInt()
+        // 48 dp de toque; el dibujo del botón sigue en 36 y el ícono en ~22.
+        val inset = context.dp(6f).toInt()
+        background = android.graphics.drawable.InsetDrawable(background, inset)
+        val p = context.dp(13f).toInt()
         setPadding(p, p, p, p)
         scaleType = ImageView.ScaleType.FIT_CENTER
         contentDescription = description
@@ -186,13 +189,13 @@ class FloatingToolbar(context: Context, private val dark: Boolean) : LinearLayou
     }
 
     private fun itemParams(): LayoutParams {
-        val s = context.dp(36f).toInt()
+        val s = context.dp(48f).toInt()
         return LayoutParams(s, s)
     }
 
     /** La raya de línea recta entra en el mismo alto que el resto de los botones. */
     private fun penParams(): LayoutParams {
-        val s = context.dp(36f).toInt()
+        val s = context.dp(48f).toInt()
         return LayoutParams(s, s)
     }
 
