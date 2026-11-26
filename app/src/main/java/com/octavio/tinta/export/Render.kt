@@ -167,9 +167,12 @@ object Render {
     }
 
     private fun write(context: Context, title: String, doc: PdfDocument): File {
-        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+        val dir = File(context.cacheDir, ExportCache.DIR).apply { mkdirs() }
+        ExportCache.cleanup(dir)
         val file = File(dir, fileName(title) + ".pdf")
-        file.outputStream().use { doc.writeTo(it) }
+        ExportCache.keeping(file) {
+            file.outputStream().use { doc.writeTo(it) }
+        }
         return file
     }
 

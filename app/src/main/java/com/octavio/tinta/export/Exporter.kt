@@ -34,7 +34,11 @@ object Exporter {
         NOTE("Nota de Tinta", "La nota entera, con imágenes y audios: para abrirla en Tinta en la otra tablet."),
     }
 
-    private fun dir(context: Context) = File(context.cacheDir, "exports").apply { mkdirs() }
+    private fun dir(context: Context): File {
+        val folder = File(context.cacheDir, ExportCache.DIR).apply { mkdirs() }
+        ExportCache.cleanup(folder)
+        return folder
+    }
 
     /** Las hojas como PNG (en una nota infinita, una imagen con todo). Llamar fuera de la pantalla. */
     fun images(context: Context, n: Note): List<File> {
@@ -89,7 +93,9 @@ object Exporter {
 
     private fun save(context: Context, bitmap: Bitmap, name: String): File {
         val f = File(dir(context), "$name.png")
-        f.outputStream().buffered().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        ExportCache.keeping(f) {
+            f.outputStream().buffered().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
         bitmap.recycle()
         return f
     }
@@ -115,8 +121,11 @@ object Exporter {
         }
     }
 
-    fun textFile(context: Context, n: Note, text: String): File =
-        File(dir(context), Render.fileName(n.title) + ".txt").apply { writeText(text) }
+    fun textFile(context: Context, n: Note, text: String): File {
+        val f = File(dir(context), Render.fileName(n.title) + ".txt")
+        ExportCache.keeping(f) { f.writeText(text) }
+        return f
+    }
 
     /**
      * La nota entera en un archivo `.tinta`: un zip con la nota, sus medios y la miniatura. Llamar
@@ -148,22 +157,24 @@ object Exporter {
     internal fun writeBundle(exportDir: File, files: NoteFiles, n: Note): File {
         exportDir.mkdirs()
         val f = File(exportDir, Render.fileName(n.title) + BUNDLE_EXT)
-        ZipOutputStream(f.outputStream().buffered()).use { zip ->
-            zip.putNextEntry(ZipEntry(MANIFEST))
-            zip.write(JSONObject().put("app", "Tinta").put("version", 1).put("titulo", n.title).toString(2).toByteArray())
-            zip.closeEntry()
-            zip.putNextEntry(ZipEntry(NOTE_ENTRY))
-            files.file(n.id).inputStream().use { it.copyTo(zip) }
-            zip.closeEntry()
-            files.thumbnail(n.id).takeIf { it.exists() }?.let { t ->
-                zip.putNextEntry(ZipEntry(THUMB_ENTRY))
-                t.inputStream().use { it.copyTo(zip) }
+        ExportCache.keeping(f) {
+            ZipOutputStream(f.outputStream().buffered()).use { zip ->
+                zip.putNextEntry(ZipEntry(MANIFEST))
+                zip.write(JSONObject().put("app", "Tinta").put("version", 1).put("titulo", n.title).toString(2).toByteArray())
                 zip.closeEntry()
-            }
-            files.mediaDir(n.id).listFiles()?.filter { it.isFile && !it.name.endsWith(".tmp") }?.forEach { m ->
-                zip.putNextEntry(ZipEntry(MEDIA_DIR + m.name))
-                m.inputStream().use { it.copyTo(zip) }
+                zip.putNextEntry(ZipEntry(NOTE_ENTRY))
+                files.file(n.id).inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
+                files.thumbnail(n.id).takeIf { it.exists() }?.let { t ->
+                    zip.putNextEntry(ZipEntry(THUMB_ENTRY))
+                    t.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
+                files.mediaDir(n.id).listFiles()?.filter { it.isFile && !it.name.endsWith(".tmp") }?.forEach { m ->
+                    zip.putNextEntry(ZipEntry(MEDIA_DIR + m.name))
+                    m.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
             }
         }
         return f
@@ -250,6 +261,8 @@ object Exporter {
         saver: ExportSaver? = null,
         launch: (() -> Unit) -> Unit,
     ) {
+        // Antes de escribir otro archivo: lo viejo que ya nadie está compartiendo.
+        dir(activity)
         fun fail(e: Throwable) = activity.runOnUiThread { activity.toastLong("No se pudo exportar: ${e.message}") }
         fun done(files: List<File>, mime: String, text: String? = null) {
             if (saveAs) deliverSave(activity, n.title, format, files, saver, launch, ::fail)
@@ -336,6 +349,8 @@ object Exporter {
     /** Comparte los archivos con las apps de Android (LocalSend, Drive, WhatsApp…). */
     fun share(activity: Activity, files: List<File>, mime: String, text: String? = null) {
         if (files.isEmpty()) return
+        // La otra app puede leerlos un rato después: la limpieza no los toca mientras tanto.
+        ExportCache.markShared(files)
         val uris = files.map { FileProvider.getUriForFile(activity, "${activity.packageName}.files", it) }
         val send = if (uris.size == 1) {
             Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])

@@ -48,5 +48,11 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- Al abrir la app, borra exportaciones viejas de cache/exports. -->
+        <provider
+            android:name=".export.ExportCacheProvider"
+            android:authorities="${applicationId}.export-cache"
+            android:exported="false" />
     </application>
 </manifest>
