@@ -62,6 +62,11 @@ object JnotesFile {
         val viewZoom: Float = Float.NaN,
         /** Imagen de la tapa (JPG/PNG) si es la tapa de un cuaderno. */
         val cover: ByteArray? = null,
+        /**
+         * Índice de la hoja (campo `c`). En un PDF es la página de ese PDF. -1 si el registro
+         * no lo trae.
+         */
+        val index: Int = -1,
     )
 
     private class PageMeta(
@@ -95,7 +100,10 @@ object JnotesFile {
 
     fun parse(data: ByteArray): JNote = parse(ByteArrayInputStream(data))
 
-    /** `pdfOut`: dónde dejar el PDF de una nota de PDF (null para no copiarlo). */
+    /**
+     * `pdfOut`: dónde dejar el PDF de una nota de PDF (null para no copiarlo).
+     * Si el archivo se corta a mitad de un registro, tira [IOException]: no es el final de la nota.
+     */
     fun parse(input: InputStream, pdfOut: File? = null): JNote {
         val src = ByteSource(unzip(input))
         val magic = src.utf()
@@ -116,7 +124,9 @@ object JnotesFile {
         val texts = LinkedHashMap<String, MutableList<JText>>()
         val points = PointBuffer()
         while (true) {
-            val more = runCatching { src.i32() }.getOrDefault(0)
+            // 0, o el fin justo del archivo, cierra la lista. Un int a medias es un registro
+            // cortado: seguir sería tirar el resto de la nota sin avisar.
+            val more = src.i32OrEnd() ?: break
             if (more != 1) break
             val type = src.utf()
             src.utf() // origen
@@ -228,7 +238,7 @@ object JnotesFile {
             val meta = pageMeta[id] ?: PageMeta(1240f, 1754f, Float.NaN, Float.NaN, Float.NaN, -1, "")
             JPage(
                 meta.width, meta.height, strokes[id].orEmpty().sortedBy { it.order }, images[id].orEmpty(), texts[id].orEmpty(),
-                meta.viewX, meta.viewY, meta.viewZoom, covers[meta.coverName],
+                meta.viewX, meta.viewY, meta.viewZoom, covers[meta.coverName], meta.index,
             )
         }
         return JNote(title, pages, kind, folder, paper, paperColor, hasPdf)

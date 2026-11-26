@@ -246,7 +246,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             if (field == Mode.LASER) laser.clear()
             if (field == Mode.CAPTURE) clearCapture()
             field = value
-            hover.let { setCursor(if (it != null && wantsEraserNow()) PointF(it.x, it.y) else null) }
+            setCursor(hover?.takeIf { wantsEraserNow() })
         }
 
     /** Radio del borrador en dp de pantalla. */
@@ -332,17 +332,26 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     /** Un dedo solo, con el lápiz cerca, espera acá hasta que llegue otro. */
     private val fingerAdmit = FingerAdmit()
 
-    /** Dónde está el lápiz sin apoyar, o null si no está cerca. */
+    /** Dónde está el lápiz sin apoyar, o null si no está cerca. Siempre el mismo objeto. */
+    private val hoverPoint = PointF()
     private var hover: PointF? = null
 
     /** Posición del cursor del borrador en pantalla, o null si no se muestra. */
+    private val cursorPoint = PointF()
     private var cursor: PointF? = null
+
+    /** Radio (dp) con el que se pintó el círculo, para volver a pintarlo si cambia. */
+    private var cursorRadius = 0f
+
+    /** Capa transparente: sólo el círculo. Encima de la tinta y debajo del trazo en curso. */
+    private val cursorLayer = CursorLayer(context)
 
     init {
         val fill = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         addView(dry, fill)
         addView(wetUnder, LayoutParams(fill))
         addView(ink, LayoutParams(fill))
+        addView(cursorLayer, LayoutParams(fill))
         addView(wetPen, LayoutParams(fill))
         watchFinished(wetUnder)
         watchFinished(wetPen)
@@ -670,8 +679,13 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         }
         if (isPen(e, 0)) {
             val near = e.actionMasked != MotionEvent.ACTION_HOVER_EXIT
-            hover = if (near) PointF(e.x, e.y) else null
-            setCursor(if (near && wantsEraser(e, 0)) PointF(e.x, e.y) else null)
+            if (near) {
+                hoverPoint.set(e.x, e.y)
+                hover = hoverPoint
+            } else {
+                hover = null
+            }
+            if (near && wantsEraser(e, 0)) setCursor(e.x, e.y) else setCursor(null)
             logButtons(e)
         }
         return super.dispatchHoverEvent(e)
@@ -971,7 +985,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             // Todas las muestras de este evento, de una sola pasada: si no, cada punto histórico
             // recorre la nota entera y puede sincronizar las tandas.
             eraseMove(e, i)
-            setCursor(PointF(e.getX(i), e.getY(i)))
+            setCursor(e.getX(i), e.getY(i))
             return
         }
         if (lassoPath != null) {
@@ -1566,7 +1580,7 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         cutEdits.clear()
         eraseX = inX(sx)
         eraseY = inY(sy)
-        setCursor(PointF(sx, sy))
+        setCursor(sx, sy)
         eraseTo(eraseX, eraseY)
     }
 
@@ -1773,9 +1787,42 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 
     private fun setCursor(p: PointF?) {
-        if (p == null && cursor == null) return
-        cursor = p
-        dry.invalidate()
+        if (p == null) setCursor(Float.NaN, Float.NaN) else setCursor(p.x, p.y)
+    }
+
+    /**
+     * Mueve o esconde el círculo del borrador. No reserva un punto por evento. Si el círculo ya
+     * estaba y no se movió más de [CURSOR_SLOP_PX], no se redibuja: un hover quieto no tiene que
+     * volver a armar baldosas ni la foto de la tinta. Sólo se invalida la capa del círculo.
+     */
+    private fun setCursor(x: Float, y: Float) {
+        val show = !x.isNaN()
+        val had = cursor != null
+        if (!show && !had) return
+        val radius = eraserRadius
+        if (show && had && radius == cursorRadius && hypot(x - cursorPoint.x, y - cursorPoint.y) <= CURSOR_SLOP_PX) return
+        if (show) {
+            cursorPoint.set(x, y)
+            cursor = cursorPoint
+            cursorRadius = radius
+        } else {
+            cursor = null
+        }
+        cursorLayer.invalidate()
+    }
+
+    /** Sólo el círculo del borrador. Así un hover no vuelve a grabar las baldosas ni la tinta. */
+    private inner class CursorLayer(context: Context) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f * density
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val c = cursor ?: return
+            paint.color = if (dark) 0x99E0E0E0.toInt() else 0x99404040.toInt()
+            canvas.drawCircle(c.x, c.y, eraserRadius * density, paint)
+        }
     }
 
     // --- Lazo ---
@@ -3448,10 +3495,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         private val view = RectF()
         private val needed = RectF()
         private val damaged = ArrayList<RectF>()
-        private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.5f * resources.displayMetrics.density
-        }
         private val accent = context.getColor(R.color.accent)
         private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -3490,17 +3533,23 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** El contenido del panel de la lupa hay que volver a grabarlo. */
         var zoomDirty = true
 
+        /**
+         * Una tanda de mallas terminó de armarse. Los trazos son los mismos: no se sincroniza la
+         * lista ni se invalida la foto de la nota. Las tandas que seguían en trazo provisorio se
+         * vuelven a grabar, y la lupa sólo si alguna de ellas cae en su recuadro.
+         */
         fun meshesArrived() {
-            stale = true
-            contentStale = true
-            version++
-            zoomDirty = true
+            if (chunks.noteMeshes(if (zoomOn) zoomBox else null)) zoomDirty = true
             invalidate()
         }
 
         fun strokesChanged() {
             inkRev++
-            meshesArrived()
+            stale = true
+            contentStale = true
+            version++
+            zoomDirty = true
+            invalidate()
         }
 
         fun contentChanged() {
@@ -3774,10 +3823,6 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
             captureRect?.let { drawCapture(canvas, it, worldToScreen) }
             textFrame?.let { drawTextFrame(canvas, it, worldToScreen) }
             var pending = drawLaser(canvas)
-            cursor?.let {
-                cursorPaint.color = if (dark) 0x99E0E0E0.toInt() else 0x99404040.toInt()
-                canvas.drawCircle(it.x, it.y, eraserRadius * density, cursorPaint)
-            }
             drawFlipShade(canvas)
             if (flipAnim != null || flip?.decided == true) pending = true
             if (vistaMode == VistaMode.LIVE && !pending && !inkWantFrame && settledNow && penPointer == NONE && fresh.isEmpty() && !bakeFrozen()) {
@@ -4316,6 +4361,9 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** Cada cuánto, como mucho, se rehace esa imagen de antemano. */
         const val OVERVIEW_EVERY_MS = 20_000L
         const val PALM_GRACE_MS = 400L
+
+        /** Por debajo de esto el círculo del borrador no se vuelve a pintar. */
+        const val CURSOR_SLOP_PX = 0.5f
 
         /** La punta quieta, en el mismo punto, este tiempo elige el borrador sin soltar. */
         const val ERASER_HOLD_MS = 500L

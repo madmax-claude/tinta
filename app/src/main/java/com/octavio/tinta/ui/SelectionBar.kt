@@ -71,13 +71,14 @@ class SelectionBar(context: Context) : LinearLayout(context) {
     private fun add(icon: Int, description: String, onClick: (View) -> Unit) = ImageButton(context).apply {
         setImageResource(icon)
         background = context.getDrawable(R.drawable.bg_tool)
-        val p = context.dp(9f).toInt()
+        // 48 dp de toque; el dibujo sigue del tamaño de antes (42 − 18).
+        val p = context.dp(12f).toInt()
         setPadding(p, p, p, p)
         scaleType = ImageView.ScaleType.FIT_CENTER
         contentDescription = description
         tip(description)
         setOnClickListener(onClick)
-    }.also { addView(it, LayoutParams(context.dp(42f).toInt(), context.dp(42f).toInt())) }
+    }.also { addView(it, LayoutParams(context.dp(48f).toInt(), context.dp(48f).toInt())) }
 
     /**
      * Muestra la barra junto a `target` (lo elegido, en coordenadas del padre), o la esconde si es

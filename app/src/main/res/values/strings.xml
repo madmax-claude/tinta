@@ -5,6 +5,7 @@
     <string name="import_jnotes">Importar PDF</string>
     <string name="empty">Todavía no hay notas.\nCreá una, o importá un PDF o tus .Jnotes.</string>
     <string name="back">Volver</string>
+    <string name="more_actions">Más acciones</string>
     <string name="dark_mode">Modo oscuro</string>
     <string name="light_mode">Modo claro</string>
     <string name="folders">Carpetas</string>
@@ -44,6 +45,12 @@
     <string name="add_text">Escribir</string>
     <string name="export">Exportar…</string>
     <string name="exporting">Exportando…</string>
+    <string name="export_as">Exportar como</string>
+    <string name="export_save_as">Guardar como…</string>
+    <string name="export_save_as_detail">Elegí la carpeta y el nombre. Si son varias imágenes, se guardan juntas en un .zip.</string>
+    <string name="export_saved">Guardado</string>
+    <string name="export_save_failed">No se pudo guardar: %1$s</string>
+    <string name="export_save_missing">el archivo ya no está</string>
     <string name="color_top_bar">Barra de arriba (pestañas y buscador)</string>
     <string name="color_tools">Barras de herramientas</string>
     <string name="color_tab">Pestaña elegida</string>
@@ -70,8 +77,12 @@
     <string name="search_notes">Buscar en las notas</string>
     <string name="no_previous_tool">El botón vuelve a la herramienta anterior: elegí otra primero</string>
     <string name="cloud_connect">Conectar Google Drive</string>
-    <string name="cloud_explain">Tinta va a guardar una copia de todas tus notas (con imágenes, carpetas y stickers) en un archivo de tu Google Drive, y la va a actualizar sola una vez por día (o cuando toques «Subir ahora»).\n\nEn la ventana que se abre ahora, tocá ☰ (arriba a la izquierda), elegí Drive y la carpeta donde guardarla, y tocá Guardar.</string>
+    <string name="cloud_explain">Tinta va a guardar una copia de todas tus notas (con imágenes, carpetas y stickers) en tu Google Drive, y la va a actualizar sola una vez por día (o cuando toques «Subir ahora»).\n\nEn la ventana que se abre, tocá ☰ (arriba a la izquierda), elegí Drive y la carpeta, y tocá «Usar esta carpeta». Cada copia se escribe en un archivo nuevo; el anterior se borra recién cuando la nueva está completa.</string>
     <string name="cloud_choose">Elegir dónde guardar</string>
+    <string name="cloud_needs_folder">Copia en Drive\ntenés que elegir una carpeta para seguir subiendo. La copia anterior sigue ahí.</string>
+    <string name="cloud_needs_folder_title">Elegí una carpeta para la copia</string>
+    <string name="cloud_needs_folder_explain">La copia que ya tenías está en un solo archivo. Esta versión no lo vuelve a escribir, porque si se corta la subida ese archivo se vacía.\n\nElegí la carpeta de Drive donde seguir guardándola. El archivo anterior no se borra, y podés traer las notas desde ahí.</string>
+    <string name="cloud_restore_previous">Traer las notas de la copia</string>
     <string name="cloud_restore_other">Restaurar desde una copia…</string>
     <string name="cloud_restore_confirm">¿Traer las notas de la copia? Se agregan las que faltan y se reemplazan las que en la copia están más nuevas. No se borra nada.</string>
     <string name="cut_done">Cortado: mantené apretado con el lazo donde quieras pegarlo</string>

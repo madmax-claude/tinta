@@ -93,13 +93,14 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
                     setImageResource(R.drawable.ic_close)
                     background = context.getDrawable(R.drawable.bg_tool)
                     scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    val q = context.dp(7f).toInt()
+                    // 48 dp de toque; la cruz sigue en los 16 dp de antes.
+                    val q = context.dp(16f).toInt()
                     setPadding(q, q, q, q)
                     alpha = 0.6f
                     contentDescription = "Cerrar «$title»"
                     (if (id == active) activeColor ?: barColor else barColor)?.let { imageTintList = android.content.res.ColorStateList.valueOf(Chrome.ink(it)) }
                     setOnClickListener { callbacks?.onTabClose(id) }
-                }, LinearLayout.LayoutParams(context.dp(30f).toInt(), context.dp(30f).toInt()))
+                }, LinearLayout.LayoutParams(context.dp(48f).toInt(), context.dp(48f).toInt()))
                 setOnClickListener { callbacks?.onTabClick(id) }
                 setOnTouchListener { v, e -> onTabTouch(v, id, e) }
                 setOnLongClickListener {
@@ -107,7 +108,7 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
                     true
                 }
             }
-            row.addView(tab, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, context.dp(40f).toInt()).apply {
+            row.addView(tab, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, context.dp(48f).toInt()).apply {
                 marginEnd = context.dp(4f).toInt()
             })
             if (id == active) activeView = tab
@@ -115,11 +116,14 @@ class TabStrip @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
         row.addView(ImageButton(context).apply {
             setImageResource(R.drawable.ic_add)
             background = context.getDrawable(R.drawable.bg_tool)
+            // El más sigue del tamaño de antes (el botón era de 40 dp).
+            val q = context.dp(4f).toInt()
+            setPadding(q, q, q, q)
             contentDescription = "Abrir otra nota en una pestaña"
             barColor?.let { imageTintList = android.content.res.ColorStateList.valueOf(Chrome.ink(it)) }
             tip(contentDescription)
             setOnClickListener { callbacks?.onAddTab(it) }
-        }, LinearLayout.LayoutParams(context.dp(40f).toInt(), context.dp(40f).toInt()))
+        }, LinearLayout.LayoutParams(context.dp(48f).toInt(), context.dp(48f).toInt()))
         activeView?.let { v -> post { smoothScrollTo((v.left - context.dp(40f).toInt()).coerceAtLeast(0), 0) } }
     }
 

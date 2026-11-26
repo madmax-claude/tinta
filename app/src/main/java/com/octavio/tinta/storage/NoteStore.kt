@@ -20,6 +20,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.zip.Deflater
@@ -121,9 +122,12 @@ class NoteStore private constructor(context: Context) {
     ) = writeNote(file(id), header, strokes, images, texts, widgets, preservedWidgets)
 
     fun writeThumbnail(id: String, bitmap: Bitmap) {
-        val tmp = File(dir, "$id.png.tmp")
-        FileOutputStream(tmp).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        tmp.renameTo(thumbnail(id))
+        val dest = thumbnail(id)
+        AtomicFile.write(dest) { out ->
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                throw IOException("no se pudo guardar ${dest.name}")
+            }
+        }
     }
 
     fun delete(id: String) {
@@ -260,9 +264,7 @@ class NoteStore private constructor(context: Context) {
             val hash = MessageDigest.getInstance("SHA-1").digest(bytes).joinToString("") { "%02x".format(it) }.take(20)
             val f = File(dir, "$hash.img")
             if (!f.exists() || f.length() != bytes.size.toLong()) {
-                val tmp = File(dir, "$hash.img.tmp")
-                tmp.writeBytes(bytes)
-                tmp.renameTo(f)
+                AtomicFile.write(f) { it.write(bytes) }
             }
             return f
         }
@@ -272,9 +274,7 @@ class NoteStore private constructor(context: Context) {
             if (file.parentFile == dir) return file
             val f = File(dir, file.name)
             if (!f.exists() && file.exists()) {
-                val tmp = File(dir, file.name + ".tmp")
-                file.copyTo(tmp, overwrite = true)
-                tmp.renameTo(f)
+                AtomicFile.write(f) { out -> file.inputStream().use { input -> input.copyTo(out) } }
             }
             return f
         }

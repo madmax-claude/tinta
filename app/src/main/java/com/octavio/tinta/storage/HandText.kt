@@ -315,9 +315,7 @@ class HandText private constructor(context: Context) {
             )
         }
         val o = JSONObject().put("v", VERSION).put("modificada", modified).put("renglones", list)
-        val tmp = File(dir, "$id.texto.tmp")
-        tmp.writeText(o.toString())
-        if (!tmp.renameTo(file(id))) tmp.delete()
+        AtomicFile.write(file(id)) { it.write(o.toString().toByteArray(Charsets.UTF_8)) }
     }
 
     private fun r1(v: Float) = (v * 10).roundToInt() / 10.0

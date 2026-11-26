@@ -35,6 +35,7 @@ import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.octavio.tinta.canvas.Elements
+import com.octavio.tinta.export.ExportSaver
 import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.jnotes.JnotesImporter
@@ -116,15 +117,18 @@ class MainActivity : TintaActivity() {
     private lateinit var cloud: CloudBackup
     private lateinit var cloudRow: TextView
 
-    /** Elegir el archivo de la copia en Drive (o donde sea). */
-    private val pickBackupTarget = registerForActivityResult(ActivityResultContracts.CreateDocument(CloudBackup.MIME)) { uri ->
-        if (uri != null) cloud.connect(uri, displayName(uri))
+    /** Elegir la carpeta de la copia en Drive (o donde sea). */
+    private val pickBackupFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) cloud.connect(uri, null)
     }
 
     /** Elegir una copia para traer sus notas. */
     private val pickBackupSource = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) restoreFrom(uri)
     }
+
+    /** "Guardar como…" de una exportación. Tiene que existir antes de que la pantalla arranque. */
+    private val exportSaver = ExportSaver(this)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -219,6 +223,10 @@ class MainActivity : TintaActivity() {
             cloudRow.text = getString(R.string.cloud_connect)
             return
         }
+        if (cloud.needsFolder) {
+            cloudRow.text = getString(R.string.cloud_needs_folder)
+            return
+        }
         val state = when {
             cloud.running -> "subiendo…"
             cloud.lastError != null -> "no se pudo subir (tocá para ver)"
@@ -234,8 +242,20 @@ class MainActivity : TintaActivity() {
             AlertDialog.Builder(this)
                 .setTitle(R.string.cloud_connect)
                 .setMessage(R.string.cloud_explain)
-                .setPositiveButton(R.string.cloud_choose) { _, _ -> pickBackupTarget.launch(CloudBackup.FILE_NAME) }
+                .setPositiveButton(R.string.cloud_choose) { _, _ -> pickBackupFolder.launch(null) }
                 .setNeutralButton(R.string.cloud_restore_other) { _, _ -> pickBackupSource.launch(arrayOf(CloudBackup.MIME, "application/octet-stream", "*/*")) }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+            return
+        }
+        if (cloud.needsFolder) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.cloud_needs_folder_title)
+                .setMessage(R.string.cloud_needs_folder_explain)
+                .setPositiveButton(R.string.cloud_choose) { _, _ -> pickBackupFolder.launch(null) }
+                .setNeutralButton(R.string.cloud_restore_previous) { _, _ ->
+                    cloud.target?.let { uri -> confirm(getString(R.string.cloud_restore_confirm), "Traer") { restoreFrom(uri, resolveNewest = true) } }
+                }
                 .setNegativeButton(R.string.cancel, null)
                 .show()
             return
@@ -250,15 +270,15 @@ class MainActivity : TintaActivity() {
                 true
             }
             menu.add("Traer las notas de la copia…").setOnMenuItemClickListener {
-                cloud.target?.let { uri -> confirm(getString(R.string.cloud_restore_confirm), "Traer") { restoreFrom(uri) } }
+                cloud.target?.let { uri -> confirm(getString(R.string.cloud_restore_confirm), "Traer") { restoreFrom(uri, resolveNewest = true) } }
                 true
             }
             menu.add(getString(R.string.cloud_restore_other)).setOnMenuItemClickListener {
                 pickBackupSource.launch(arrayOf(CloudBackup.MIME, "application/octet-stream", "*/*"))
                 true
             }
-            menu.add("Guardar la copia en otro archivo…").setOnMenuItemClickListener {
-                pickBackupTarget.launch(CloudBackup.FILE_NAME)
+            menu.add("Guardar la copia en otra carpeta…").setOnMenuItemClickListener {
+                pickBackupFolder.launch(null)
                 true
             }
             menu.add("Dejar de copiar en Drive").setOnMenuItemClickListener {
@@ -269,11 +289,12 @@ class MainActivity : TintaActivity() {
         }
     }
 
-    private fun restoreFrom(uri: Uri) {
+    private fun restoreFrom(uri: Uri, resolveNewest: Boolean = false) {
         hint("Trayendo las notas de la copia…")
         Thread({
             val result = runCatching {
-                contentResolver.openInputStream(uri)?.use { input ->
+                val source = if (resolveNewest) cloud.latestBackupUri() ?: error("todavía no hay una copia") else uri
+                contentResolver.openInputStream(source)?.use { input ->
                     cloud.restore(input, EditorActivity::isOpen) { text -> runOnUiThread { cloudRow.text = text } }
                 } ?: error("no se pudo leer el archivo")
             }
@@ -1159,7 +1180,7 @@ class MainActivity : TintaActivity() {
     }
 
     /** Exportar una nota de la lista: se lee del disco y se exporta. */
-    private fun export(info: NoteInfo, format: Exporter.Format) {
+    private fun export(info: NoteInfo, format: Exporter.Format, saveAs: Boolean) {
         if (format != Exporter.Format.TEXT) hint(getString(R.string.exporting))
         store.io.execute {
             val n = runCatching { store.load(info.id) }.getOrNull()
@@ -1178,12 +1199,14 @@ class MainActivity : TintaActivity() {
                             0,
                             PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages, n.paperColor),
                         ) { which ->
-                            if (which.isEmpty()) toast("Marcá al menos una hoja") else Exporter.start(this, store, n, format, which) { it() }
+                            if (which.isEmpty()) toast("Marcá al menos una hoja") else {
+                                Exporter.start(this, store, n, format, which, saveAs = saveAs, saver = exportSaver) { it() }
+                            }
                         }
                         return@runOnUiThread
                     }
                 }
-                Exporter.start(this, store, n, format) { it() }
+                Exporter.start(this, store, n, format, saveAs = saveAs, saver = exportSaver) { it() }
             }
         }
     }
@@ -1218,7 +1241,7 @@ class MainActivity : TintaActivity() {
                     true
                 }
                 menu.add(R.string.export).setOnMenuItemClickListener {
-                    Popups.exportFormats(this@MainActivity, anchor) { f -> export(info, f) }
+                    Popups.exportFormats(this@MainActivity, anchor) { f, saveAs -> export(info, f, saveAs) }
                     true
                 }
             }

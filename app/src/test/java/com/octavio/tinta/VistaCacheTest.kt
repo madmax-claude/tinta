@@ -2,12 +2,15 @@ package com.octavio.tinta
 
 import com.octavio.tinta.storage.VistaCache
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 
 class VistaCacheTest {
 
@@ -50,6 +53,25 @@ class VistaCacheTest {
                 it.writeInt(0)
             }
             assertNull(VistaCache.read(file))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun unRenameFallidoNoPisaNiDejaTemporal() {
+        val dir = File.createTempFile("vista", "").apply { delete(); mkdirs() }
+        try {
+            val blocked = File(dir, "nota.vista").apply { check(mkdir()) }
+            val error = assertThrows(IOException::class.java) {
+                VistaCache.write(
+                    blocked, 99L, 4, dark = true, scale = 2f,
+                    listOf(VistaCache.Band(0f, 0f, 1f, 1f, byteArrayOf(1, 2, 3))),
+                )
+            }
+            assertTrue(error.message!!.contains("no se pudo guardar"))
+            assertTrue(blocked.isDirectory)
+            assertFalse(File(dir, "nota.vista.tmp").exists())
         } finally {
             dir.deleteRecursively()
         }

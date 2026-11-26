@@ -36,6 +36,7 @@ import androidx.lifecycle.Lifecycle
 import com.octavio.tinta.canvas.Elements
 import com.octavio.tinta.canvas.NoteCanvasView
 import com.octavio.tinta.canvas.NoteCanvasView.Mode
+import com.octavio.tinta.export.ExportSaver
 import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.model.Appearance
@@ -84,6 +85,7 @@ import com.octavio.tinta.ui.RecorderBar
 import com.octavio.tinta.ui.SearchPanel
 import com.octavio.tinta.ui.SelectionBar
 import com.octavio.tinta.ui.TabStrip
+import com.octavio.tinta.ui.TopBarFit
 import com.octavio.tinta.ui.TextBoxEditor
 import com.octavio.tinta.ui.TimerPanel
 import com.octavio.tinta.ui.TimerState
@@ -206,6 +208,9 @@ class EditorActivity :
         if (granted) startRecording() else toast("Sin permiso para el micrófono no se puede grabar")
     }
 
+    /** "Guardar como…" de una exportación. Tiene que existir antes de que la pantalla arranque. */
+    private val exportSaver = ExportSaver(this)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -225,19 +230,22 @@ class EditorActivity :
 
         findViewById<View>(R.id.back).setOnClickListener { finish() }
         findViewById<View>(R.id.search).setOnClickListener { if (searchPanel.isOpen) closeSearch() else openSearch() }
-        findViewById<View>(R.id.sheet).setOnClickListener { pickSheet(it) }
-        findViewById<View>(R.id.beside).setOnClickListener { chooseNote(it, beside = true) }
+        findViewById<View>(R.id.sheet).setOnClickListener { pickSheet(shownAnchor(it)) }
+        findViewById<View>(R.id.beside).setOnClickListener { chooseNote(shownAnchor(it), beside = true) }
         findViewById<ImageButton>(R.id.dark).apply {
             setImageResource(if (isDark) R.drawable.ic_light else R.drawable.ic_dark)
             contentDescription = getString(if (isDark) R.string.light_mode else R.string.dark_mode)
             setOnClickListener { toggleDark() }
         }
         findViewById<View>(R.id.fit).setOnClickListener { canvas.fitToContent() }
-        findViewById<View>(R.id.export).setOnClickListener { v -> Popups.exportFormats(this, v, ::export) }
+        findViewById<View>(R.id.export).setOnClickListener { v ->
+            Popups.exportFormats(this, shownAnchor(v)) { format, saveAs -> export(format, saveAs) }
+        }
         findViewById<View>(R.id.fullscreen).setOnClickListener { setFullscreen(true) }
         listOf(R.id.search, R.id.sheet, R.id.beside, R.id.dark, R.id.fit, R.id.fullscreen, R.id.export).forEach {
             findViewById<View>(it).apply { tip(contentDescription) }
         }
+        TopBarFit.install(findViewById(R.id.topbar))
 
         setupOverlays()
         applyColors()
@@ -1616,7 +1624,7 @@ class EditorActivity :
     private fun pagesMenu(anchor: View) {
         if (!canvas.pages.paged) {
             hint(getString(R.string.pages_need_size), long = true)
-            pickSheet(findViewById(R.id.sheet))
+            pickSheet(shownAnchor(findViewById(R.id.sheet)))
             return
         }
         val k = canvas.currentPage()
@@ -1947,6 +1955,13 @@ class EditorActivity :
         changed(redraw = true)
     }
 
+    /** Si el botón pasó al menú de desborde, el popup se abre desde ahí. */
+    private fun shownAnchor(preferred: View): View {
+        if (preferred.isShown) return preferred
+        val overflow = findViewById<View>(R.id.top_overflow)
+        return if (overflow != null && overflow.isShown) overflow else preferred
+    }
+
     private fun pickSheet(anchor: View) {
         val n = note ?: return
         Popups.sheet(
@@ -2047,7 +2062,7 @@ class EditorActivity :
     }
 
     /** Exportar la nota que se ve (en el formato elegido). La nota entera se guarda antes. */
-    private fun export(format: Exporter.Format) {
+    private fun export(format: Exporter.Format, saveAs: Boolean) {
         val n = note ?: return
         canvas.finishPending()
         if (format == Exporter.Format.PDF && n.pages.paged) {
@@ -2060,16 +2075,16 @@ class EditorActivity :
                     canvas.currentPage(),
                     PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages, n.paperColor),
                 ) { which ->
-                    if (which.isEmpty()) toast("Marcá al menos una hoja") else exportNow(format, which)
+                    if (which.isEmpty()) toast("Marcá al menos una hoja") else exportNow(format, which, saveAs)
                 }
                 return
             }
         }
-        exportNow(format, null)
+        exportNow(format, null, saveAs)
     }
 
-    /** `pages`: hojas del PDF, o null para la nota entera. */
-    private fun exportNow(format: Exporter.Format, pages: List<Int>?) {
+    /** `pages`: hojas del PDF, o null para la nota entera. `saveAs`: el usuario elige dónde, en vez de compartir. */
+    private fun exportNow(format: Exporter.Format, pages: List<Int>?, saveAs: Boolean) {
         val n = note ?: return
         canvas.finishPending()
         if (format == Exporter.Format.NOTE) {
@@ -2077,7 +2092,7 @@ class EditorActivity :
             save(withThumbnail = true)
         }
         if (format != Exporter.Format.TEXT) hint(getString(R.string.exporting))
-        Exporter.start(this, store, Exporter.snapshot(n), format, pages) { open -> launching(open) }
+        Exporter.start(this, store, Exporter.snapshot(n), format, pages, saveAs = saveAs, saver = exportSaver) { open -> launching(open) }
     }
 
     companion object {
