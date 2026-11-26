@@ -3490,17 +3490,23 @@ class NoteCanvasView @JvmOverloads constructor(context: Context, attrs: Attribut
         /** El contenido del panel de la lupa hay que volver a grabarlo. */
         var zoomDirty = true
 
+        /**
+         * Una tanda de mallas terminó de armarse. Los trazos son los mismos: no se sincroniza la
+         * lista ni se invalida la foto de la nota. Las tandas que seguían en trazo provisorio se
+         * vuelven a grabar, y la lupa sólo si alguna de ellas cae en su recuadro.
+         */
         fun meshesArrived() {
-            stale = true
-            contentStale = true
-            version++
-            zoomDirty = true
+            if (chunks.noteMeshes(if (zoomOn) zoomBox else null)) zoomDirty = true
             invalidate()
         }
 
         fun strokesChanged() {
             inkRev++
-            meshesArrived()
+            stale = true
+            contentStale = true
+            version++
+            zoomDirty = true
+            invalidate()
         }
 
         fun contentChanged() {

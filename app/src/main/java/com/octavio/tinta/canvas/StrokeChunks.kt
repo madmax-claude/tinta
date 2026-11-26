@@ -142,6 +142,26 @@ class StrokeChunks {
     }
 
     /**
+     * Llegaron mallas y la lista de trazos es la misma. No rearma las tandas: sólo marca las que
+     * ahora tienen más mallas, para grabarlas de nuevo en lugar del trazo provisorio. True si
+     * alguna de esas tandas toca `box` (el recuadro de la lupa, en el mundo). Con `box` null no se mira.
+     */
+    fun noteMeshes(box: RectF?): Boolean {
+        var hit = false
+        for (c in chunks) {
+            val members = c.members
+            if (members.isEmpty()) continue
+            var built = 0
+            for (i in members.indices) if (members[i].stroke != null) built++
+            if (built == c.built) continue
+            c.meshDirty = true
+            c.built = built
+            if (box != null && c.intersects(box.left, box.top, box.right, box.bottom)) hit = true
+        }
+        return hit
+    }
+
+    /**
      * Cuando la ventana deja de verse (otra app encima), Android borra lo grabado en todos los
      * nodos. Al volver, las tandas creen que siguen grabadas y la nota se ve vacía. Si se perdió la
      * grabación del nodo raíz, se perdieron todas: se marcan para volver a grabarlas. Devuelve true
