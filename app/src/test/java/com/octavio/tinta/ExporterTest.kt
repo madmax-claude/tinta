@@ -258,7 +258,7 @@ class ExporterTest {
                     ),
                 )
             }
-            NoteFormat.writeElements(out, note.images, note.texts, note.widgets, version >= 11)
+            NoteFormat.writeElements(out, note.images, note.texts, note.widgets, version >= 11, note.preservedWidgets)
             if (version >= 9) NoteFormat.writeGroups(out, note.strokes.map { it.group })
             out.flush()
             compressed.finish()

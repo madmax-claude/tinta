@@ -6,6 +6,7 @@ import android.graphics.RectF
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.model.Background
 import com.octavio.tinta.model.Clipboard
+import com.octavio.tinta.model.Note
 import com.octavio.tinta.model.Viewport
 import java.io.File
 import java.util.UUID
@@ -50,8 +51,15 @@ class Stickers(context: Context) {
     fun delete(s: Sticker) {
         s.file.delete()
         s.thumbnail.delete()
-        // Los archivos de medios que ya no usa ningún sticker se van.
-        val used = list().flatMap { st -> runCatching { load(st) }.getOrNull()?.let { c -> c.images.map { it.file.name } + c.widgets.flatMap { w -> w.files.map { it.name } } }.orEmpty() }.toSet()
+        // Los archivos de medios que ya no usa ningún sticker se van. Si alguno no se puede leer,
+        // o tiene widgets que esta versión no entiende, no se sabe qué archivos siguen en uso.
+        val notes = ArrayList<Note>()
+        for (st in list()) {
+            val n = runCatching { NoteStore.readNote(st.file, st.id, media) }.getOrNull()
+            if (n == null || n.preservedWidgets.isNotEmpty()) return
+            notes.add(n)
+        }
+        val used = notes.flatMap { n -> n.images.map { it.file.name } + n.widgets.flatMap { w -> w.files.map { it.name } } }.toSet()
         media.listFiles().orEmpty().filter { it.name !in used }.forEach { it.delete() }
     }
 

@@ -469,7 +469,8 @@ class EditorActivity :
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 // Las que ya se están mostrando en alguna mitad no se ofrecen.
-                val others = all.filter { Tabs.showing(it.id) < 0 && (beside || it.id !in here) }
+                // Una nota dañada no se abre: se ve en la lista, nada más.
+                val others = all.filter { !it.damaged && Tabs.showing(it.id) < 0 && (beside || it.id !in here) }
                 val names = listOf(getString(R.string.new_note)) +
                     others.map { info -> folders[info.folder]?.let { "${info.title}  ·  $it" } ?: info.title }
                 AlertDialog.Builder(this)

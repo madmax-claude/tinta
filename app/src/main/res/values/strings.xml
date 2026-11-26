@@ -104,4 +104,7 @@
     <string name="ok">Aceptar</string>
     <string name="clear_all">¿Borrar todo lo escrito en esta nota? Se puede deshacer.</string>
     <string name="delete_note">¿Borrar la nota «%1$s»? No se puede deshacer.</string>
+    <string name="damaged_note">Nota dañada</string>
+    <string name="damaged_note_meta">No se puede abrir</string>
+    <string name="damaged_note_open">Esta nota está dañada y no se puede abrir. El archivo sigue en la tablet.</string>
 </resources>

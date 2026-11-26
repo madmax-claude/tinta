@@ -44,7 +44,8 @@ import java.util.zip.InflaterInputStream
  *     desde la versión 4 las imágenes no van adentro: por cada una, float izquierda, arriba, ancho,
  *         alto, giro, byte banderas (1: bloqueada), UTF nombre del archivo en la carpeta de medios
  *         de la nota; y después de los textos, int cantidad de widgets y por cada uno int largo y
- *         su JSON en UTF-8 (ver [Widget])
+ *         su JSON en UTF-8 (ver [Widget]). El JSON que esta versión no puede representar se
+ *         reescribe con los mismos bytes: no cambia la versión del formato.
  *     desde la versión 10, al final de la cabecera: boolean hojas de costado (ver [PageLayout.horizontal])
  *     desde la versión 12, después: int cantidad, y por cada hoja UTF nombre (vacío si no tiene) e
  *         int fondo (el id de [com.octavio.tinta.model.Background], o -1 para el de la nota)
@@ -204,7 +205,14 @@ object NoteFormat {
         return RawStroke(tool, color, size, epsilon, left, top, right, bottom, inputs)
     }
 
-    fun writeElements(out: DataOutputStream, images: List<NoteImage>, texts: List<NoteText>, widgets: List<Widget>, richText: Boolean = false) {
+    fun writeElements(
+        out: DataOutputStream,
+        images: List<NoteImage>,
+        texts: List<NoteText>,
+        widgets: List<Widget>,
+        richText: Boolean = false,
+        preserved: List<ByteArray> = emptyList(),
+    ) {
         out.writeInt(images.size)
         for (i in images) {
             out.writeFloat(i.left)
@@ -231,17 +239,22 @@ object NoteFormat {
                 out.writeByte(if (t.clip) 1 else 0)
             }
         }
-        out.writeInt(widgets.size)
+        out.writeInt(widgets.size + preserved.size)
         for (w in widgets) {
             val bytes = w.toJson().toString().toByteArray(Charsets.UTF_8)
             out.writeInt(bytes.size)
             out.write(bytes)
+        }
+        for (raw in preserved) {
+            out.writeInt(raw.size)
+            out.write(raw)
         }
     }
 
     /**
      * Lee imágenes, textos y widgets. En las versiones 2 y 3 las imágenes venían adentro:
      * `keep` guarda sus bytes en la carpeta de medios y devuelve el archivo.
+     * El JSON de un widget que no se puede usar queda en [preserved], con los mismos bytes.
      */
     fun readElements(
         input: DataInputStream,
@@ -250,6 +263,7 @@ object NoteFormat {
         images: MutableList<NoteImage>,
         texts: MutableList<NoteText>,
         widgets: MutableList<Widget>,
+        preserved: MutableList<ByteArray> = mutableListOf(),
         keep: (ByteArray) -> File,
     ) {
         repeat(input.readInt()) {
@@ -279,9 +293,23 @@ object NoteFormat {
         }
         if (version < 4) return
         repeat(input.readInt()) {
-            val json = String(blob(input), Charsets.UTF_8)
-            runCatching { Widget.fromJson(JSONObject(json), mediaDir) }.getOrNull()?.let(widgets::add)
+            val raw = blob(input)
+            val widget = runCatching {
+                val o = JSONObject(String(raw, Charsets.UTF_8))
+                Widget.fromJson(o, mediaDir)?.takeUnless { hasForeignKeys(o, it) }
+            }.getOrNull()
+            if (widget != null) widgets.add(widget) else preserved.add(raw)
         }
+    }
+
+    /** True si el JSON trae una clave que [Widget.toJson] no vuelve a escribir. */
+    private fun hasForeignKeys(original: JSONObject, widget: Widget): Boolean {
+        val known = widget.toJson()
+        val keys = original.keys()
+        while (keys.hasNext()) {
+            if (!known.has(keys.next())) return true
+        }
+        return false
     }
 
     private const val LOCKED = 1
