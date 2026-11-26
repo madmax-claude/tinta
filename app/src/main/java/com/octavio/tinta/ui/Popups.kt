@@ -961,12 +961,25 @@ object Popups {
             .show()
     }
 
-    /** Exportar: en qué formato, con para qué sirve cada uno. */
-    fun exportFormats(activity: Activity, anchor: View, onPick: (com.octavio.tinta.export.Exporter.Format) -> Unit) {
+    /**
+     * Exportar: en qué formato, con para qué sirve cada uno. Tocar un formato comparte, como
+     * siempre. "Guardar como…" abre la misma lista y el segundo valor de `onPick` llega en true.
+     */
+    fun exportFormats(activity: Activity, anchor: View, onPick: (com.octavio.tinta.export.Exporter.Format, Boolean) -> Unit) {
+        formatsPopup(activity, anchor, saving = false, onPick)
+    }
+
+    private fun formatsPopup(
+        activity: Activity,
+        anchor: View,
+        saving: Boolean,
+        onPick: (com.octavio.tinta.export.Exporter.Format, Boolean) -> Unit,
+    ) {
         val c: Context = activity
         val box = column(c)
         lateinit var popup: PopupWindow
-        box.addView(label(c, "Exportar como", 15f))
+        box.addView(label(c, c.getString(if (saving) R.string.export_save_as else R.string.export_as), 15f))
+        if (saving) box.addView(hint(c, c.getString(R.string.export_save_as_detail)))
         for (f in com.octavio.tinta.export.Exporter.Format.entries) {
             box.addView(LinearLayout(c).apply {
                 orientation = LinearLayout.VERTICAL
@@ -977,7 +990,23 @@ object Popups {
                 addView(hint(c, f.detail))
                 setOnClickListener {
                     popup.dismiss()
-                    onPick(f)
+                    onPick(f, saving)
+                }
+            }, topMargin(c, 6f))
+        }
+        if (!saving) {
+            // Misma ficha que las filas de formato, con estado propio (no otra llamada a getDrawable).
+            val rowBg = (box.getChildAt(box.childCount - 1) as? LinearLayout)?.background?.constantState?.newDrawable()?.mutate()
+            box.addView(LinearLayout(c).apply {
+                orientation = LinearLayout.VERTICAL
+                background = rowBg
+                val p = c.dp(10f).toInt()
+                setPadding(p, p, p, p)
+                addView(label(c, c.getString(R.string.export_save_as), 15f).apply { setTextColor(c.getColor(R.color.accent)) })
+                addView(hint(c, c.getString(R.string.export_save_as_detail)))
+                setOnClickListener {
+                    popup.dismiss()
+                    formatsPopup(activity, anchor, saving = true, onPick)
                 }
             }, topMargin(c, 6f))
         }

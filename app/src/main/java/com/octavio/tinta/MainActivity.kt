@@ -35,6 +35,7 @@ import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.octavio.tinta.canvas.Elements
+import com.octavio.tinta.export.ExportSaver
 import com.octavio.tinta.export.Exporter
 import com.octavio.tinta.export.Render
 import com.octavio.tinta.jnotes.JnotesImporter
@@ -125,6 +126,9 @@ class MainActivity : TintaActivity() {
     private val pickBackupSource = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) restoreFrom(uri)
     }
+
+    /** "Guardar como…" de una exportación. Tiene que existir antes de que la pantalla arranque. */
+    private val exportSaver = ExportSaver(this)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -1154,7 +1158,7 @@ class MainActivity : TintaActivity() {
     }
 
     /** Exportar una nota de la lista: se lee del disco y se exporta. */
-    private fun export(info: NoteInfo, format: Exporter.Format) {
+    private fun export(info: NoteInfo, format: Exporter.Format, saveAs: Boolean) {
         if (format != Exporter.Format.TEXT) hint(getString(R.string.exporting))
         store.io.execute {
             val n = runCatching { store.load(info.id) }.getOrNull()
@@ -1173,12 +1177,14 @@ class MainActivity : TintaActivity() {
                             0,
                             PageThumbs.Snapshot(n.strokes.toList(), n.images.toList(), n.texts.toList(), n.widgets.toList(), n.background, n.pages, n.paperColor),
                         ) { which ->
-                            if (which.isEmpty()) toast("Marcá al menos una hoja") else Exporter.start(this, store, n, format, which) { it() }
+                            if (which.isEmpty()) toast("Marcá al menos una hoja") else {
+                                Exporter.start(this, store, n, format, which, saveAs = saveAs, saver = exportSaver) { it() }
+                            }
                         }
                         return@runOnUiThread
                     }
                 }
-                Exporter.start(this, store, n, format) { it() }
+                Exporter.start(this, store, n, format, saveAs = saveAs, saver = exportSaver) { it() }
             }
         }
     }
@@ -1213,7 +1219,7 @@ class MainActivity : TintaActivity() {
             }
             menu.add(R.string.move_to_folder).setOnMenuItemClickListener { moveToFolder(info); true }
             menu.add(R.string.export).setOnMenuItemClickListener {
-                Popups.exportFormats(this@MainActivity, anchor) { f -> export(info, f) }
+                Popups.exportFormats(this@MainActivity, anchor) { f, saveAs -> export(info, f, saveAs) }
                 true
             }
             menu.add(R.string.delete).setOnMenuItemClickListener {

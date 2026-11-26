@@ -58,7 +58,7 @@
 
     <issue
         id="AndroidGradlePluginVersion"
-        message="A newer version of Gradle than 9.8.1 is available: 9.9.1"
+        message="A newer version of Gradle than 9.8.1 is available: 9.9.2"
         errorLine1="distributionUrl=https\://services.gradle.org/distributions/gradle-9.8.1-bin.zip"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
