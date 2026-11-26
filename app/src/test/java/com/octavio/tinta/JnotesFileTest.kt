@@ -7,15 +7,18 @@ import com.octavio.tinta.model.PageLayout
 import com.octavio.tinta.model.PageSize
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlin.math.abs
 
 /** Arma un .Jnotes chico con la estructura que documenta jnotes2pdf.py. */
 class JnotesFileTest {
@@ -167,6 +170,117 @@ class JnotesFileTest {
         assertEquals(Background.BLANK, r.note.background)
         assertEquals(r.note.pages.pageTop(1), r.pdfPages[1].top, 0.01f)
         media.deleteRecursively()
+    }
+
+    /**
+     * Hojas de un PDF con el campo `c` desordenado y con huecos, más una hoja que no lo trae.
+     * `index` null: el registro PAGE no tiene `c`.
+     */
+    private data class PdfSheet(val id: String, val index: Int?, val x: Int, val y: Int)
+
+    private fun pdfNote(pdf: ByteArray, pages: List<PdfSheet>): ByteArray {
+        val jzip = ByteArrayOutputStream()
+        DataOutputStream(jzip).use { out ->
+            out.writeUTF("TRY")
+            out.writeInt(2)
+            out.writeUTF("pdf1")
+            record(out, "NOTE", "pdf1", """{"b":"Apunte","c":3}""")
+            for (p in pages) {
+                val c = if (p.index == null) "" else ""","c":${p.index}"""
+                record(out, "PAGE", p.id, """{"a":"${p.id}"$c,"k":1240.0,"l":1754.0}""")
+            }
+            val strokes = pages.joinToString(",") { p ->
+                """{"b":0,"a":"${p.id}","c":{"a":2,"c":-16777216,"d":3.0,"k":[{"x":${p.x},"y":${p.y},"p":0.5}]}}"""
+            }
+            record(out, "STROKE", "trazos", "[$strokes]")
+            record(out, "PDF", "nota.pdf", String(pdf, Charsets.ISO_8859_1))
+            out.writeInt(0)
+        }
+        return jzip.toByteArray()
+    }
+
+    @Test
+    fun pdfPageIndexFollowsThePageWhenThereAreGaps() {
+        val media = Files.createTempDirectory("medios").toFile()
+        val out = File(media, "nota.pdf")
+        val pdf = "%PDF-1.4 huecos".toByteArray()
+        // En el archivo vienen al revés: primero la 5, después la 0, y una sin índice.
+        val bytes = pdfNote(
+            pdf,
+            listOf(
+                PdfSheet("lejos", 5, 300, 200),
+                PdfSheet("cero", 0, 10, 20),
+                PdfSheet("suelta", null, 500, 400),
+            ),
+        )
+        try {
+            val parsed = JnotesFile.parse(bytes)
+            assertEquals(listOf(0, 5, -1), parsed.pages.map { it.index })
+            val r = JnotesImporter.import(ByteArrayInputStream(bytes), "id", "x", 2f, media, out)
+            // 0 y 5 salen del campo `c`. La hoja sin `c` cae en la posición 2, no en la 1.
+            assertEquals(listOf(0, 5, 2), r.pdfPages.map { it.index })
+            val n = r.note
+            assertEquals(3, n.pages.minPages)
+            r.pdfPages.forEachIndexed { k, p -> assertEquals(n.pages.pageTop(k), p.top, 0.01f) }
+            val scale = minOf(n.pages.width / 1240f, n.pages.height / 1754f)
+            val x0 = n.pages.left + (n.pages.width - 1240f * scale) / 2
+            fun stroke(x: Int, y: Int, sheet: Int) {
+                val left = x0 + x * scale - 3f * scale
+                val top = n.pages.pageTop(sheet) + y * scale - 3f * scale
+                assertTrue(
+                    n.strokes.any { abs(it.left - left) < 0.05f && abs(it.top - top) < 0.05f },
+                )
+            }
+            stroke(10, 20, 0)
+            stroke(300, 200, 1)
+            stroke(500, 400, 2)
+        } finally {
+            media.deleteRecursively()
+        }
+    }
+
+    /** Una nota válida y, después, los bytes que quedaron de un registro que no se terminó de escribir. */
+    private fun noteThen(tail: ByteArray): ByteArray {
+        val jzip = ByteArrayOutputStream()
+        DataOutputStream(jzip).use { out ->
+            out.writeUTF("TRY")
+            out.writeInt(2)
+            out.writeUTF("n")
+            record(out, "NOTE", "n", """{"b":"Cortada","c":3}""")
+            record(out, "PAGE", "p0", """{"c":0,"k":1240.0,"l":1754.0}""")
+            record(
+                out, "STROKE", "s0",
+                """[{"b":0,"a":"p0","c":{"a":2,"c":-16777216,"d":3.0,"k":[{"x":10,"y":20,"p":0.4}]}}]""",
+            )
+            out.write(tail)
+        }
+        return jzip.toByteArray()
+    }
+
+    @Test
+    fun truncatedRecordFailsTheImport() {
+        val media = Files.createTempDirectory("medios").toFile()
+        try {
+            fun fails(bytes: ByteArray): IOException = assertThrows(IOException::class.java) {
+                JnotesImporter.import(ByteArrayInputStream(bytes), "id", "x", 2f, media, File(media, "nota.pdf"))
+            }
+            // El int de "hay otro registro" quedó a medias: antes se tomaba como fin de archivo.
+            val cutFlag = fails(noteThen(byteArrayOf(0, 0, 1)))
+            assertTrue(cutFlag.message.orEmpty().contains("cortad"))
+            // El registro empieza (int 1) y se corta en el encabezado.
+            val cutBody = fails(noteThen(byteArrayOf(0, 0, 0, 1, 0)))
+            assertTrue(cutBody.message.orEmpty().contains("cortad"))
+        } finally {
+            media.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun fileEndingAtARecordBoundaryStillParses() {
+        val full = notebook()
+        val note = JnotesFile.parse(full.copyOf(full.size - 4))
+        assertEquals("Cuaderno", note.title)
+        assertEquals(2, note.pages.size)
     }
 
     @Test
