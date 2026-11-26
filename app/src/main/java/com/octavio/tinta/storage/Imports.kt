@@ -15,6 +15,7 @@ import com.octavio.tinta.model.NoteImage
 import com.octavio.tinta.model.PageLayout
 import com.octavio.tinta.model.PageSize
 import java.io.File
+import java.io.IOException
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
@@ -54,7 +55,13 @@ object Imports {
                 } else {
                     f
                 }
-                File(dir, "$name.jpg").also { out -> out.outputStream().use { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) } }
+                File(dir, "$name.jpg").also { out ->
+                    AtomicFile.write(out) { stream ->
+                        if (!scaled.compress(Bitmap.CompressFormat.JPEG, 85, stream)) {
+                            throw IOException("no se pudo guardar ${out.name}")
+                        }
+                    }
+                }
             }
             return Video(file, thumb, duration, w, h)
         } finally {

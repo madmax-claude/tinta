@@ -8,6 +8,7 @@ import com.octavio.tinta.model.Background
 import com.octavio.tinta.model.Clipboard
 import com.octavio.tinta.model.Viewport
 import java.io.File
+import java.io.IOException
 import java.util.UUID
 
 /**
@@ -35,7 +36,18 @@ class Stickers(context: Context) {
         NoteStore.writeNote(file, header, clip.strokes, images, clip.texts, widgets)
         val thumb = File(dir, "$id.png")
         val bitmap = Render.fit(clip.strokes, images, clip.texts, widgets, THUMB)
-        thumb.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        try {
+            AtomicFile.write(thumb) { out ->
+                if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                    throw IOException("no se pudo guardar ${thumb.name}")
+                }
+            }
+        } catch (failure: IOException) {
+            // La nota del sticker ya se escribió. Sin miniatura, no quedó guardado.
+            file.delete()
+            bitmap.recycle()
+            throw failure
+        }
         bitmap.recycle()
         return Sticker(id, file, thumb)
     }

@@ -1,12 +1,10 @@
 package com.octavio.tinta.storage
 
 import java.io.BufferedInputStream
-import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.io.IOException
 
 /**
@@ -72,30 +70,27 @@ object VistaCache {
         }.getOrNull()
     }
 
-    /** Reemplaza el archivo de una sola vez. Un corte a la mitad deja la foto anterior. */
+    /** Reemplaza el archivo de una sola vez. Si no se puede, la foto anterior queda y se avisa. */
     fun write(file: File, modified: Long, strokeCount: Int, dark: Boolean, scale: Float, bands: List<Band>) {
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        DataOutputStream(BufferedOutputStream(FileOutputStream(tmp))).use { out ->
-            out.writeInt(MAGIC)
-            out.writeInt(VERSION)
-            out.writeInt(EPOCH)
-            out.writeLong(modified)
-            out.writeInt(strokeCount)
-            out.writeInt(if (dark) 1 else 0)
-            out.writeFloat(scale)
-            out.writeInt(bands.size)
-            for (b in bands) {
-                out.writeFloat(b.left)
-                out.writeFloat(b.top)
-                out.writeFloat(b.right)
-                out.writeFloat(b.bottom)
-                out.writeInt(b.png.size)
-                out.write(b.png)
+        AtomicFile.write(file) { raw ->
+            DataOutputStream(raw).use { out ->
+                out.writeInt(MAGIC)
+                out.writeInt(VERSION)
+                out.writeInt(EPOCH)
+                out.writeLong(modified)
+                out.writeInt(strokeCount)
+                out.writeInt(if (dark) 1 else 0)
+                out.writeFloat(scale)
+                out.writeInt(bands.size)
+                for (b in bands) {
+                    out.writeFloat(b.left)
+                    out.writeFloat(b.top)
+                    out.writeFloat(b.right)
+                    out.writeFloat(b.bottom)
+                    out.writeInt(b.png.size)
+                    out.write(b.png)
+                }
             }
-        }
-        if (!tmp.renameTo(file)) {
-            tmp.copyTo(file, overwrite = true)
-            tmp.delete()
         }
     }
 
