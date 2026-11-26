@@ -1,12 +1,17 @@
 package com.octavio.tinta
 
 import com.octavio.tinta.storage.Library
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 
 class LibraryTest {
     @get:Rule val tmp = TemporaryFolder()
@@ -52,8 +57,163 @@ class LibraryTest {
 
     @Test
     fun brokenFileStartsEmpty() {
-        file().writeText("{ esto no es json")
+        // Se ve vacía en memoria, pero el archivo dañado no se pisa: si no, el próximo
+        // create/move lo reemplazaría por un árbol vacío y se perderían las carpetas.
+        val broken = "{ esto no es json"
+        file().writeText(broken)
+        val lib = Library(file())
+        assertEquals(0, lib.folders().size)
+        val denied = assertThrows(IllegalStateException::class.java) { lib.create("Nueva") }
+        assertTrue(denied.message!!.contains("no se reescribe"))
+        assertThrows(IllegalStateException::class.java) { lib.adopt("x", "X") }
+        lib.move("nota", null)
+        lib.move("nota", "cualquiera")
+        lib.forget("nota")
+        lib.rename("no", "Tampoco")
+        lib.delete("no")
+        assertEquals(emptySet<String>(), lib.deleteTree("no"))
+        assertEquals(false, lib.moveFolder("no", null))
+        assertEquals(broken, file().readText())
         assertEquals(0, Library(file()).folders().size)
+        assertFalse(File(file().path + ".tmp").exists())
+    }
+
+    @Test
+    fun wrongShapeIsNotTreatedAsAnEmptyLibrary() {
+        val broken = """{"carpetas":"no","notas":[]}"""
+        file().writeText(broken)
+        val lib = Library(file())
+        assertEquals(0, lib.folders().size)
+        assertThrows(IllegalStateException::class.java) { lib.create("A") }
+        assertEquals(broken, file().readText())
+    }
+
+    @Test
+    fun emptyButValidFileCanStillGrow() {
+        file().writeText("""{"carpetas":[],"notas":{}}""")
+        val lib = Library(file())
+        lib.create("A")
+        assertEquals(listOf("A"), Library(file()).folders().map { it.name })
+    }
+
+    @Test
+    fun lastGoodBakSurvivesACutFile() {
+        val lib = Library(file())
+        val a = lib.create("Análisis")
+        val termo = lib.create("Termo", a.id)
+        lib.move("n1", termo.id)
+        val bak = File(file().path + ".bak")
+        assertEquals(file().readText(), bak.readText())
+        assertFalse(File(file().path + ".tmp").exists())
+
+        val good = bak.readText()
+        file().writeText(good.take(12))
+        val recovered = Library(file())
+        assertEquals(listOf("Análisis", "Termo"), recovered.path(termo.id).map { it.name })
+        assertEquals(termo.id, recovered.folderOf("n1"))
+        assertEquals(good, bak.readText())
+
+        val quimica = recovered.create("Química")
+        assertEquals(file().readText(), bak.readText())
+        assertTrue(file().readText().contains("Química"))
+        file().writeText("")
+        val again = Library(file())
+        assertEquals(quimica.id, again.folders().first { it.name == "Química" }.id)
+        assertEquals(listOf("Análisis", "Termo"), again.path(termo.id).map { it.name })
+        assertEquals(termo.id, again.folderOf("n1"))
+    }
+
+    @Test
+    fun failedWriteRollsBackAndSurfaces() {
+        val parent = File(tmp.root, "no-es-carpeta")
+        parent.writeText("x")
+        val f = File(parent, "carpetas.json")
+        val lib = Library(f)
+        assertThrows(IOException::class.java) { lib.create("A") }
+        assertEquals(0, lib.folders().size)
+        assertFalse(f.exists())
+        assertFalse(File(f.path + ".tmp").exists())
+    }
+
+    @Test
+    fun failedRenameKeepsMemoryAndBak() {
+        val lib = Library(file())
+        val a = lib.create("A")
+        lib.move("n", a.id)
+        val bak = File(file().path + ".bak")
+        val bakText = bak.readText()
+        check(file().delete())
+        check(file().mkdir())
+        File(file(), "bloqueo").writeText("x")
+        val denied = assertThrows(IllegalStateException::class.java) { lib.create("B") }
+        assertTrue(denied.message!!.contains("no se pudo guardar"))
+        assertEquals(listOf("A"), lib.folders().map { it.name })
+        assertEquals(a.id, lib.folderOf("n"))
+        assertEquals(bakText, bak.readText())
+        assertFalse(File(file().path + ".tmp").exists())
+    }
+
+    @Test
+    fun backupReappliesEveryNoteAndFolderLocation() {
+        val lib = Library(file())
+        val ciencias = lib.create("Ciencias")
+        val fisica = lib.create("Física", ciencias.id)
+        val local = lib.create("Local")
+        lib.move("vieja", ciencias.id)
+        lib.move("queda", local.id)
+
+        lib.applyBackup(
+            JSONObject(
+                """
+                {"carpetas":[
+                    {"id":"${fisica.id}","nombre":"Física II"},
+                    {"id":"termo","nombre":"Termo","padre":"${fisica.id}"},
+                    {"id":"${ciencias.id}","nombre":"Ciencias","padre":"termo"}
+                ],"notas":{"vieja":"termo","nueva":"${fisica.id}","queda":"no-existe"}}
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals("Física II", lib.folder(fisica.id)!!.name)
+        assertNull(lib.parentOf(fisica.id))
+        assertEquals(fisica.id, lib.parentOf("termo"))
+        assertEquals("termo", lib.parentOf(ciencias.id))
+        assertEquals("termo", lib.folderOf("vieja"))
+        assertEquals(fisica.id, lib.folderOf("nueva"))
+        // Una nota que la copia manda a una carpeta que no existe no se desubica.
+        assertEquals(local.id, lib.folderOf("queda"))
+        assertEquals("Local", lib.folder(local.id)!!.name)
+
+        val again = Library(file())
+        assertEquals("termo", again.folderOf("vieja"))
+        assertEquals(fisica.id, again.folderOf("nueva"))
+        assertEquals(local.id, again.folderOf("queda"))
+        assertEquals(listOf("Física II", "Termo", "Ciencias"), again.path(ciencias.id).map { it.name })
+    }
+
+    @Test
+    fun backupResolvesABrokenLibraryFile() {
+        val broken = "{ esto no es json"
+        file().writeText(broken)
+        val lib = Library(file())
+        assertThrows(IllegalStateException::class.java) {
+            lib.applyBackup(JSONObject("""{"carpetas":[],"notas":{}}"""))
+        }
+        assertEquals(broken, file().readText())
+
+        lib.applyBackup(
+            JSONObject(
+                """{"carpetas":[{"id":"a","nombre":"A","padre":"p"},{"id":"p","nombre":"P"}],"notas":{"n":"a","m":"p"}}""",
+            ),
+        )
+        assertEquals("p", lib.parentOf("a"))
+        assertEquals("a", lib.folderOf("n"))
+        assertEquals("p", lib.folderOf("m"))
+        val again = Library(file())
+        assertEquals("a", again.folderOf("n"))
+        assertEquals("p", again.parentOf("a"))
+        again.create("Más")
+        assertEquals(3, Library(file()).folders().size)
     }
 
     @Test

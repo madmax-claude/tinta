@@ -76,6 +76,8 @@ object Popups {
         onHoldToErase: (Boolean) -> Unit,
         onChange: (Pen) -> Unit,
         onDelete: () -> Unit,
+        fingerUndo: Boolean,
+        onFingerUndo: (Boolean) -> Unit,
     ) {
         val c: Context = activity
         var pen = start
@@ -188,6 +190,13 @@ object Popups {
             topMargin(c, 10f),
         )
         box.addView(hint(c, c.getString(R.string.hold_to_erase_hint)))
+        box.addView(
+            switch(c, c.getString(R.string.finger_undo), fingerUndo, onFingerUndo).apply {
+                minimumHeight = c.dp(48f).toInt()
+            },
+            topMargin(c, 10f),
+        )
+        box.addView(hint(c, c.getString(R.string.finger_undo_hint)))
 
         if (canDelete) {
             box.addView(
