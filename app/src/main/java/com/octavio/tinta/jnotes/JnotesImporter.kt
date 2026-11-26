@@ -95,7 +95,11 @@ object JnotesImporter {
             val h = page.height * s
             val left = layout.left + (layout.width - w) / 2
             val top = layout.pageTop(k)
-            if (pdf && j.hasPdf) pdfPages.add(PdfPage(k, left, top, w, h))
+            if (pdf && j.hasPdf) {
+                // `c` de la hoja es la página del PDF. Si el registro no lo trae, queda el lugar en la lista.
+                val pageIndex = if (page.index >= 0) page.index else k
+                pdfPages.add(PdfPage(pageIndex, left, top, w, h))
+            }
             page.cover?.let { covers.add(NoteImage(left, top, w, h, 0f, NoteStore.keep(mediaDir, it), locked = true)) }
             failed += addContent(note, page, s, left, top, mediaDir)
         }

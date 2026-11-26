@@ -35,6 +35,17 @@ class ByteSource(private val input: InputStream) {
 
     fun i32(): Int = (u8() shl 24) or (u8() shl 16) or (u8() shl 8) or u8()
 
+    /**
+     * El int que abre cada registro. Null si el archivo termina justo antes: no hay otro.
+     * Si hay bytes pero no los cuatro, la nota quedó cortada a mitad de un registro.
+     */
+    fun i32OrEnd(): Int? {
+        val first = read()
+        if (first < 0) return null
+        fun next(): Int = read().also { if (it < 0) throw EOFException("la nota está cortada a mitad de un registro") }
+        return (first shl 24) or (next() shl 16) or (next() shl 8) or next()
+    }
+
     fun i64(): Long = (i32().toLong() shl 32) or (i32().toLong() and 0xFFFFFFFFL)
 
     fun bytes(n: Int): ByteArray {
